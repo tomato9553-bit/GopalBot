@@ -1,2 +1,2 @@
-discord.py
-groq
+discord.py==2.7.1
+groq==1.1.2
