@@ -1,6 +1,6 @@
 # GopalBot
 
-A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentions, direct messages, and any message containing its name with concise, friendly AI-generated replies.
+A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentions, direct messages, and any message containing its name with concise, friendly AI-generated replies. It also supports slash-style prefix commands for Wikipedia lookups and direct AI queries.
 
 ## Features
 
@@ -8,7 +8,11 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 - Responds to direct messages (DMs)
 - Responds when its name (`gopalbot`) appears in a message
 - Powered by **LLaMA 3.3 70B** via the [Groq](https://groq.com/) API
-- Automatically truncates long responses to fit Discord's 2000-character limit
+- **`!ask`** command for direct AI queries
+- **`!wiki`** command for Wikipedia summaries with rich embeds
+- Splits long responses across multiple messages (no more silent truncation)
+- Structured logging for easy debugging and monitoring
+- Friendly error messages for all failure scenarios
 
 ## Prerequisites
 
@@ -49,6 +53,17 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 - **Mention the bot:** `@GopalBot What is the capital of France?`
 - **Use its name:** `GopalBot tell me a joke`
 - **Send a DM:** Send a message directly to the bot
+- **Ask the AI directly:** `!ask Explain quantum computing`
+- **Search Wikipedia:** `!wiki Albert Einstein`
+- **View all commands:** `!help`
+
+## Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `!ask <question>` | Ask the Grok AI a question | `!ask What is gravity?` |
+| `!wiki <query>` | Search Wikipedia for a summary | `!wiki Python programming` |
+| `!help` | List all available commands | `!help` |
 
 ## Dependencies
 
@@ -56,3 +71,4 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 |---------|---------|
 | `discord.py` | Discord API wrapper |
 | `groq` | Groq API client for LLaMA inference |
+| `wikipedia` | Wikipedia API for search summaries |
