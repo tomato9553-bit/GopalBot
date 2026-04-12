@@ -2,10 +2,12 @@ import asyncio
 import collections
 import json
 import pathlib
+import random
 import discord
 import logging
 import os
 import re
+import aiohttp
 import wikipedia
 from mistralai.client import MistralClient
 from discord.ext import commands
@@ -35,6 +37,12 @@ if not MISTRAL_API_KEY:
     raise EnvironmentError("MISTRAL_API_KEY environment variable is not set.")
 
 mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+
+# Tenor GIF API (optional — bot works fine without it)
+TENOR_API_KEY = os.getenv("TENOR_API_KEY")
+TENOR_REQUEST_TIMEOUT = 5  # seconds
+if not TENOR_API_KEY:
+    logger.warning("TENOR_API_KEY is not set — GIF embedding will be disabled.")
 
 SYSTEM_PROMPT = (
     # ── Core Identity ──────────────────────────────────────────────────────────
@@ -317,6 +325,100 @@ async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messa
     return supplement
 
 
+async def search_tenor_gif(query: str) -> str | None:
+    """Search Tenor for a GIF matching *query* and return a random result URL.
+
+    Returns ``None`` if the API key is not configured, no results are found,
+    or any network/API error occurs.
+    """
+    if not TENOR_API_KEY:
+        return None
+    url = "https://tenor.googleapis.com/v2/search"
+    params = {
+        "q": query,
+        "key": TENOR_API_KEY,
+        "limit": 10,
+        "media_filter": "gif",
+        "contentfilter": "medium",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=TENOR_REQUEST_TIMEOUT)) as resp:
+                if resp.status != 200:
+                    logger.warning("Tenor API returned status %s for query '%s'", resp.status, query)
+                    return None
+                data = await resp.json()
+                results = data.get("results", [])
+                if not results:
+                    return None
+                pick = random.choice(results)
+                # Prefer the "gif" media format; fall back to the first available
+                media_formats = pick.get("media_formats", {})
+                gif_data = media_formats.get("gif") or next(iter(media_formats.values()), None)
+                if gif_data:
+                    return gif_data.get("url")
+    except Exception as exc:
+        logger.warning("Tenor GIF search failed for query '%s': %s", query, exc)
+    return None
+
+
+# Keywords used to pick a contextual GIF search term
+_STUPID_QUESTION_KEYWORDS = frozenset({
+    "dumb", "stupid", "idiot", "duh", "obvious", "really?", "seriously?",
+    "bruh", "seriously", "facepalm", "smh", "cmon", "c'mon", "what?",
+})
+_CRINGE_KEYWORDS = frozenset({
+    "cringe", "cringy", "cringey", "awkward", "yikes", "oof", "yike",
+    "embarrassing", "weird flex", "no cap", "cap",
+})
+_FUNNY_KEYWORDS = frozenset({
+    "lmao", "lol", "haha", "funny", "hilarious", "rofl", "dead", "💀",
+    "😂", "🤣", "genius", "big brain", "legendary", "goat", "w", "based",
+})
+
+_ROAST_GIF_TERMS = ("roast reaction", "savage reaction", "mic drop")
+_STUPID_GIF_TERMS = ("facepalm", "confused reaction", "bruh moment")
+_CRINGE_GIF_TERMS = ("cringe", "awkward reaction", "yikes reaction")
+_FUNNY_GIF_TERMS  = ("laughing", "celebration", "this is fine meme")
+
+
+def detect_gif_context(prompt: str, reply: str) -> str | None:
+    """Analyse the user's *prompt* and bot *reply* to decide whether to attach
+    a GIF and which search term to use.
+
+    Returns a Tenor search query string, or ``None`` if no GIF is warranted.
+    """
+    combined = (prompt + " " + reply).lower()
+
+    # Roast replies almost always deserve a reaction GIF
+    roast_indicators = ("roast", "savage", "brutal", "dragged", "cooked")
+    if any(w in combined for w in roast_indicators):
+        return random.choice(_ROAST_GIF_TERMS)
+
+    tokens = set(re.findall(r"\b\w+\b|[^\w\s]", combined))
+
+    if tokens & _STUPID_QUESTION_KEYWORDS:
+        return random.choice(_STUPID_GIF_TERMS)
+
+    if tokens & _CRINGE_KEYWORDS:
+        return random.choice(_CRINGE_GIF_TERMS)
+
+    if tokens & _FUNNY_KEYWORDS:
+        return random.choice(_FUNNY_GIF_TERMS)
+
+    return None
+
+
+async def append_contextual_gif(prompt: str, reply: str) -> str:
+    """Return *reply* with a contextually appropriate GIF URL appended if one is found."""
+    gif_query = detect_gif_context(prompt, reply)
+    if gif_query:
+        gif_url = await search_tenor_gif(gif_query)
+        if gif_url:
+            return f"{reply}\n{gif_url}"
+    return reply
+
+
 async def ask_mistral_ai(
     prompt: str,
     history: list[dict] | None = None,
@@ -406,6 +508,7 @@ async def on_message(message: discord.Message):
         async with message.channel.typing():
             try:
                 reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+                reply = await append_contextual_gif(prompt, reply)
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -444,6 +547,7 @@ async def ask_command(ctx: commands.Context, *, question: str):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
+            reply = await append_contextual_gif(question, reply)
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -485,6 +589,7 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await append_contextual_gif(prompt, reply)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
             record_message(channel_id, "assistant", reply)
