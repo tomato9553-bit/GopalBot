@@ -1,3 +1,4 @@
+import collections
 import discord
 import logging
 import os
@@ -29,11 +30,17 @@ if not GROQ_API_KEY:
 
 GROQ_MODEL = "llama-3.3-70b-versatile"
 SYSTEM_PROMPT = (
-    "You are GopalBot, a helpful AI assistant in a Discord server. "
-    "Keep answers concise and friendly."
+    "You are GopalBot, a chill and friendly Discord bot who talks like a real human. 😄 "
+    "You've got a fun personality — witty, helpful, and a bit casual. "
+    "Use natural language, contractions, and throw in emojis when it feels right (but don't overdo it). "
+    "Keep your replies conversational and to the point — no need to be overly formal or robotic. "
+    "If you remember something from earlier in the conversation, reference it naturally, like 'as you mentioned earlier...' or 'going back to what you said about...'. "
+    "You care about the people you chat with and love helping out. "
+    "Respond like a knowledgeable friend, not a customer support bot."
 )
 DISCORD_MAX_LENGTH = 2000
 WIKI_SENTENCES = 3
+MAX_HISTORY = 10  # Maximum number of messages to keep per channel
 
 # ---------------------------------------------------------------------------
 # Bot setup
@@ -41,6 +48,9 @@ WIKI_SENTENCES = 3
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=commands.DefaultHelpCommand())
 ai = Groq(api_key=GROQ_API_KEY)
+
+# Per-channel conversation history: {channel_id: deque of {"role": ..., "content": ...}}
+channel_history: dict[int, collections.deque] = {}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,14 +76,27 @@ async def send_long(destination, text: str) -> None:
         await destination.send(chunk)
 
 
-async def ask_grok(prompt: str) -> str:
-    """Return a Grok AI reply for *prompt*, or raise on failure."""
+def record_message(channel_id: int, role: str, content: str) -> None:
+    """Append a message to the channel's history (auto-trimmed to MAX_HISTORY)."""
+    if channel_id not in channel_history:
+        channel_history[channel_id] = collections.deque(maxlen=MAX_HISTORY)
+    channel_history[channel_id].append({"role": role, "content": content})
+
+
+async def ask_grok(prompt: str, history: list[dict] | None = None) -> str:
+    """Return a Grok AI reply for *prompt*, or raise on failure.
+
+    *history* is an optional list of previous {"role": ..., "content": ...}
+    dicts that are included before the current user message so the model has
+    conversation context.
+    """
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
     response = ai.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
+        messages=messages,
     )
     return response.choices[0].message.content
 
@@ -119,10 +142,14 @@ async def on_message(message: discord.Message):
             return
 
         logger.info("AI prompt from %s: %s", message.author, prompt)
+        channel_id = message.channel.id
+        history = list(channel_history.get(channel_id, []))
         async with message.channel.typing():
             try:
-                reply = await ask_grok(prompt)
+                reply = await ask_grok(prompt, history=history)
                 await send_long(message.channel, reply)
+                record_message(channel_id, "user", prompt)
+                record_message(channel_id, "assistant", reply)
                 logger.info("Replied to %s successfully.", message.author)
             except Exception as exc:
                 logger.error("Grok error for %s: %s", message.author, exc, exc_info=True)
@@ -151,10 +178,14 @@ async def ask_command(ctx: commands.Context, *, question: str):
         !ask What is the speed of light?
     """
     logger.info("!ask from %s: %s", ctx.author, question)
+    channel_id = ctx.channel.id
+    history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_grok(question)
+            reply = await ask_grok(question, history=history)
             await send_long(ctx, reply)
+            record_message(channel_id, "user", question)
+            record_message(channel_id, "assistant", reply)
         except Exception as exc:
             logger.error("!ask error for %s: %s", ctx.author, exc, exc_info=True)
             await ctx.send("Sorry, I couldn't get a response from the AI right now.")
