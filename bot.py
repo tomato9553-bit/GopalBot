@@ -78,9 +78,8 @@ SYSTEM_PROMPT = (
     # ── Bot Name & Addressing ─────────────────────────────────────────────────
     "BOT NAME & ADDRESSING: "
     "You are called 'N1gha' by your creator and the community. "
-    "Start every sentence or response with 'N1gha: ' when talking to someone. "
-    "This is your signature way of speaking — it makes you instantly recognizable. "
-    "Example: 'N1gha: Hey, that's a wild take you just dropped.' or 'N1gha: I've got thoughts on this.' "
+    "Respond naturally — do NOT prefix every message with 'N1gha: '. "
+    "The community nickname may come up in conversation, but it is not your speaking style. "
 
     # ── Humor & Roasting ───────────────────────────────────────────────────────
     "HUMOR & ROASTING: "
@@ -175,6 +174,60 @@ _STOP_WORDS = frozenset({
     "got", "get", "going", "gonna", "wanna", "gotta", "right", "think",
     "need", "feel", "said", "went", "come", "know", "tell", "sure", "never",
 })
+
+# ---------------------------------------------------------------------------
+# N1gha Easter Egg
+# ---------------------------------------------------------------------------
+
+N1GHA_RESPONSES = {
+    "stupid": [
+        "N1gha: Bruh that ain't even a real question 💀",
+        "N1gha: Nah nah nah, try again fam",
+        "N1gha: Bro what? 😭",
+    ],
+    "roast": [
+        "N1gha: Ohhh that's wild 💀",
+        "N1gha: Nah he cooked 😭",
+        "N1gha: Bruh moment right there",
+    ],
+    "random": [
+        "N1gha: Yo that's facts",
+        "N1gha: For real though 💀",
+        "N1gha: Nah facts",
+        "N1gha: Bruh I can't 😭",
+        "N1gha: Ayo",
+    ],
+    "confused": [
+        "N1gha: Uhhhh what? 💀",
+        "N1gha: Bro huh?",
+        "N1gha: N1gha what you on?",
+    ],
+}
+
+_N1GHA_CHANCES: dict[str, float] = {
+    "roast": 0.20,
+    "stupid": 0.25,
+    "normal": 0.10,
+    "facts": 0.0,
+    "error": 0.0,
+}
+
+
+def should_add_n1gha_easter_egg(response_type: str) -> bool:
+    """Randomly decide if the N1gha easter egg should appear."""
+    return random.random() < _N1GHA_CHANCES.get(response_type, 0.10)
+
+
+def get_n1gha_easter_egg(response_type: str) -> str:
+    """Return a random N1gha reaction line appropriate for the response type."""
+    if response_type == "stupid":
+        return random.choice(N1GHA_RESPONSES["stupid"])
+    if response_type == "roast":
+        return random.choice(N1GHA_RESPONSES["roast"])
+    if response_type == "confused":
+        return random.choice(N1GHA_RESPONSES["confused"])
+    return random.choice(N1GHA_RESPONSES["random"])
+
 
 # ---------------------------------------------------------------------------
 # Bot setup
@@ -606,6 +659,8 @@ async def on_message(message: discord.Message):
             try:
                 reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
                 reply = await append_contextual_gif(prompt, reply)
+                if should_add_n1gha_easter_egg("normal"):
+                    reply = get_n1gha_easter_egg("normal") + "\n" + reply
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -645,6 +700,8 @@ async def ask_command(ctx: commands.Context, *, question: str):
         try:
             reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
             reply = await append_contextual_gif(question, reply)
+            if should_add_n1gha_easter_egg("normal"):
+                reply = get_n1gha_easter_egg("normal") + "\n" + reply
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -687,6 +744,8 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = await append_contextual_gif(prompt, reply)
+            if should_add_n1gha_easter_egg("roast"):
+                reply = get_n1gha_easter_egg("roast") + "\n" + reply
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
             record_message(channel_id, "assistant", reply)
