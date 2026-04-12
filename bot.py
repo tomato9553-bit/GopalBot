@@ -26,7 +26,7 @@ if not DISCORD_TOKEN:
     raise EnvironmentError("DISCORD_TOKEN environment variable is not set.")
 
 # Local Mistral API running on the owner's Victus PC (RTX 3050)
-LOCAL_API_URL = os.getenv("LOCAL_API_URL", "http:192.168.1.2//:8000")
+LOCAL_API_URL = os.getenv("LOCAL_API_URL", "http://192.168.1.2:8000")
 LOCAL_API_TIMEOUT = 8  # seconds before treating PC as offline
 
 SYSTEM_PROMPT = (
