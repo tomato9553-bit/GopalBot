@@ -14,7 +14,6 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 - **Data-Driven Opinions** — backs arguments with statistics and facts, clearly labels opinion vs. fact
 - **Emotional Intelligence & Empathy** — detects emotional tone, responds with care in serious situations, avoids humor when inappropriate
 - **Political Knowledge** — broad knowledge of global politics, ideologies, and current events with nuanced, balanced takes
-- **Israel-Palestine & Middle East** — fair, evidence-based discussion presenting both sides with empathy and honest assessment
 - **`!ask`** command for direct AI queries
 - **`!roast`** command for witty, playful roasts
 - **`!wiki`** command for Wikipedia summaries with rich embeds
