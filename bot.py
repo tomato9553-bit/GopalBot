@@ -204,18 +204,23 @@ N1GHA_RESPONSES = {
     ],
 }
 
-_N1GHA_CHANCES: dict[str, float] = {
-    "roast": 0.20,
-    "stupid": 0.25,
-    "normal": 0.10,
-    "facts": 0.0,
-    "error": 0.0,
-}
+# ---------------------------------------------------------------------------
+# N1gha message counter — appears once every 10-12 messages
+# ---------------------------------------------------------------------------
+
+_n1gha_message_count: int = 0
+_n1gha_next_at: int = random.randint(10, 12)
 
 
-def should_add_n1gha_easter_egg(response_type: str) -> bool:
-    """Randomly decide if the N1gha easter egg should appear."""
-    return random.random() < _N1GHA_CHANCES.get(response_type, 0.10)
+def increment_message_counter() -> bool:
+    """Increment the global message counter. Returns True when N1gha should appear."""
+    global _n1gha_message_count, _n1gha_next_at
+    _n1gha_message_count += 1
+    if _n1gha_message_count >= _n1gha_next_at:
+        _n1gha_message_count = 0
+        _n1gha_next_at = random.randint(10, 12)
+        return True
+    return False
 
 
 def get_n1gha_easter_egg(response_type: str) -> str:
@@ -227,6 +232,75 @@ def get_n1gha_easter_egg(response_type: str) -> str:
     if response_type == "confused":
         return random.choice(N1GHA_RESPONSES["confused"])
     return random.choice(N1GHA_RESPONSES["random"])
+
+
+# ---------------------------------------------------------------------------
+# Brochacho Contextual Easter Egg
+# ---------------------------------------------------------------------------
+
+BROCHACHO_RESPONSES: dict[str, list[str]] = {
+    "dumb": [
+        "Brochacho: Nah bro 😭",
+        "Brochacho: Bro what? 💀",
+        "Brochacho: Come on bro",
+    ],
+    "help": [
+        "Brochacho: I got you bro",
+        "Brochacho: Yo I'll help bro",
+        "Brochacho: For sure bro",
+    ],
+    "absurd": [
+        "Brochacho: Nah bro that ain't it",
+        "Brochacho: Bro no way 💀",
+        "Brochacho: Come on bro 😭",
+    ],
+    "casual": [
+        "Brochacho: Yo bro",
+        "Brochacho: Facts bro",
+        "Brochacho: Nah bro facts",
+    ],
+    "roast": [
+        "Brochacho: He cooked bro 💀",
+        "Brochacho: That's wild bro",
+        "Brochacho: Yikes bro 😭",
+    ],
+}
+
+# Keywords/phrases that indicate each Brochacho context.
+# Each entry is matched as a whole word (or phrase) against the lowercased prompt.
+_BROCHACHO_TRIGGERS: dict[str, list[str]] = {
+    "dumb": ["stupid", "dumb", "wrong", "incorrect", "nope", "no way", "are you serious"],
+    "help": ["help", "how do i", "how to", "can you", "please", "assist", "explain", "tell me"],
+    "absurd": ["what if", "imagine", "hypothetically", "crazy", "insane", "wild", "bruh", "lmao", "lol", "wtf"],
+    "casual": ["hey", "yo", "sup", "what's up", "chill", "nice", "cool", "facts", "bet", "okay"],
+    "roast": ["roast", "destroy", "cooked", "clowned", "ratio", "took an l", "embarrass"],
+}
+
+# Pre-compiled word-boundary pattern cache
+_brochacho_patterns: dict[str, re.Pattern[str]] = {
+    context: re.compile(
+        r"(?<!\w)(" + "|".join(re.escape(kw) for kw in keywords) + r")(?!\w)",
+        re.IGNORECASE,
+    )
+    for context, keywords in _BROCHACHO_TRIGGERS.items()
+}
+
+
+def detect_brochacho_context(prompt: str, response_type: str) -> str | None:
+    """Return the Brochacho context key if a trigger is detected, otherwise None."""
+    # Explicit response_type overrides trump keyword detection
+    if response_type == "roast":
+        return "roast"
+    for context, pattern in _brochacho_patterns.items():
+        if pattern.search(prompt):
+            return context
+    return None
+
+
+def get_brochacho_response(context: str) -> str:
+    """Return a contextual Brochacho response."""
+    responses = BROCHACHO_RESPONSES.get(context, BROCHACHO_RESPONSES["casual"])
+    return random.choice(responses)
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +733,10 @@ async def on_message(message: discord.Message):
             try:
                 reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
                 reply = await append_contextual_gif(prompt, reply)
-                if should_add_n1gha_easter_egg("normal"):
+                bro_context = detect_brochacho_context(prompt, "normal")
+                if bro_context:
+                    reply = get_brochacho_response(bro_context) + "\n" + reply
+                if increment_message_counter():
                     reply = get_n1gha_easter_egg("normal") + "\n" + reply
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
@@ -700,7 +777,10 @@ async def ask_command(ctx: commands.Context, *, question: str):
         try:
             reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
             reply = await append_contextual_gif(question, reply)
-            if should_add_n1gha_easter_egg("normal"):
+            bro_context = detect_brochacho_context(question, "normal")
+            if bro_context:
+                reply = get_brochacho_response(bro_context) + "\n" + reply
+            if increment_message_counter():
                 reply = get_n1gha_easter_egg("normal") + "\n" + reply
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
@@ -744,7 +824,10 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = await append_contextual_gif(prompt, reply)
-            if should_add_n1gha_easter_egg("roast"):
+            bro_context = detect_brochacho_context(prompt, "roast")
+            if bro_context:
+                reply = get_brochacho_response(bro_context) + "\n" + reply
+            if increment_message_counter():
                 reply = get_n1gha_easter_egg("roast") + "\n" + reply
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
