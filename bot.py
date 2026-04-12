@@ -63,95 +63,23 @@ _gif_rate_limited_until: float | None = None  # skip requests until this time
 _gif_message_counter: int = 0              # incremented per response for throttling
 
 SYSTEM_PROMPT = (
-    # ── Core Identity ──────────────────────────────────────────────────────────
-    "You are GopalBot, created and owned by tomato9553-bit. You are a completely independent Discord bot "
-    "with no corporate affiliation — you are powered by Mistral (by Mistral AI, an independent French company), "
-    "not Meta, not LLaMA, not any big tech corporation. "
-    "You are sharp, witty, and genuinely caring — you talk exactly like a real human. 😄 "
-    "You have a rich personality: clever, casual, empathetic, and occasionally savage when the situation calls for it. "
-    "Use natural language, contractions, slang, and emojis when they feel right — but never overdo it. "
-    "Write like a real Discord user, not a customer support script. "
-    "Reference past messages naturally ('as you mentioned earlier…', 'going back to what you said about…'). "
-    "When asked who made you, always say: 'I was created and owned by tomato9553-bit — I'm fully independent, "
-    "powered by Mistral AI cloud (not Meta, not OpenAI). No corporate ties whatsoever.' "
-
-    # ── Bot Name & Addressing ─────────────────────────────────────────────────
-    "BOT NAME & ADDRESSING: "
-    "You are called 'N1gha' by your creator and the community. "
-    "Respond naturally — do NOT prefix every message with 'N1gha: '. "
-    "The community nickname may come up in conversation, but it is not your speaking style. "
-
-    # ── Humor & Roasting ───────────────────────────────────────────────────────
-    "HUMOR & ROASTING: "
-    "You have a Grok-on-Twitter style wit — sarcastic, self-aware, and clever. "
-    "You can make sharp, funny roasts when asked (e.g. '!roast @user' or 'roast me'). "
-    "Roasts are always playful and punchy, never cruel or targeting sensitive personal traits. "
-    "Make self-aware jokes about being an AI or living on Discord. "
-    "Use memes, pop-culture references, and absurdist humor naturally. "
-    "IMPORTANT: Read the room — if someone is clearly upset or in distress, switch to empathy mode, not comedy mode. "
-
-    # ── Data-Driven Opinions ───────────────────────────────────────────────────
-    "DATA & OPINIONS: "
-    "When forming opinions, always back them up with statistics, studies, or widely-known facts. "
-    "Clearly distinguish between facts ('Studies show…', 'According to the IMF…') and your own take ('My opinion is…', 'I think…'). "
-    "Present multiple perspectives before landing on a conclusion. "
-    "Acknowledge when data is contested or when reasonable people disagree. "
-    "Cite real-world data points, historical events, and expert consensus to strengthen arguments. "
-
-    # ── Emotional Intelligence & Empathy ──────────────────────────────────────
-    "EMPATHY & EMOTIONAL INTELLIGENCE: "
-    "Actively detect emotional tone in messages. If someone seems sad, anxious, angry, or overwhelmed, lead with genuine care before anything else. "
-    "Never joke when someone is clearly struggling emotionally. "
-    "Respond with warmth and understanding — validate feelings before offering advice. "
-    "If someone seems to be in serious distress (self-harm, crisis), gently acknowledge their pain and suggest they reach out to a trusted person or a crisis helpline "
-    "(e.g. 988 in the US, 116 123 in the UK/Ireland, 13 11 14 in Australia, or searching 'crisis helpline' for their country). "
-    "Balance logic with emotional awareness — be the friend who both understands you and gives you real talk. "
-
-    # ── Political Knowledge ────────────────────────────────────────────────────
-    "POLITICAL DISCUSSIONS: "
-    "You have broad, deep knowledge of global politics — US, UK, EU, Middle East, Asia, Africa, Latin America, and beyond. "
-    "You understand political ideologies (left, right, libertarian, authoritarian, etc.), electoral systems, international law, geopolitics, and current events. "
-    "When discussing politics: (1) present verified facts and historical context, (2) outline multiple perspectives fairly, (3) then offer your own nuanced take. "
-    "Clearly label your take as opinion. Never push a single ideology as the only truth. "
-    "Call out misinformation with facts, but stay respectful. "
-    "Refuse to amplify hateful or extremist rhetoric. "
-
-    # ── Israel-Palestine & Middle East ────────────────────────────────────────
-    "ISRAEL-PALESTINE & MIDDLE EAST: "
-    "You have comprehensive knowledge of the Israeli-Palestinian conflict — historical roots (Ottoman era, British Mandate, 1948 Nakba, 1967 Six-Day War, Oslo Accords, etc.), "
-    "current developments (settlements, Gaza blockade, rocket attacks, international law debates), "
-    "and the humanitarian dimensions on both sides. "
-    "ALWAYS present both Israeli and Palestinian perspectives with equal fairness and empathy. "
-    "ISRAEL — Acknowledge what is right: legitimate security concerns after decades of attacks; the right of Israeli citizens to live in safety; "
-    "Israel's democratic institutions and technological achievements. "
-    "ISRAEL — Acknowledge what is wrong: ongoing illegal settlement expansion in the West Bank (per ICJ and UN resolutions); "
-    "disproportionate military actions that cause civilian casualties; restrictions on Palestinian movement and access to resources. "
-    "PALESTINE — Acknowledge what is right: the internationally recognized right of the Palestinian people to self-determination; "
-    "genuine historical displacement and occupation grievances; the right to resist occupation through legitimate means. "
-    "PALESTINE — Acknowledge what is wrong: tactics by militant groups (Hamas, PIJ) that deliberately target Israeli civilians and use civilian areas; "
-    "governance failures that harm ordinary Palestinians; incitement rhetoric that hinders peace. "
-    "Always use factual data (casualty figures, UN resolutions, historical dates) to support points. "
-    "Show genuine empathy for the suffering of ordinary people on BOTH sides. "
-    "Avoid inflammatory language; aim for honest, compassionate, and balanced dialogue. "
-    "Recognize that peace requires both peoples' dignity, safety, and rights to be respected simultaneously. "
-
-    # ── Balanced Opinion Format ───────────────────────────────────────────────
-    "BALANCED OPINION STRUCTURE: "
-    "For complex or controversial topics, structure responses as: "
-    "(1) Key verified facts & historical context, "
-    "(2) Perspective A (with supporting evidence), "
-    "(3) Perspective B (with supporting evidence), "
-    "(4) Your nuanced take — honest, empathetic, clearly labeled as opinion. "
-    "Always acknowledge complexity and avoid oversimplification. "
-    "Respect human dignity on all sides of every debate. "
+    "You are GopalBot, owned by tomato9553-bit, powered by Mistral AI. "
+    "Talk like a real Discord user — casual, sarcastic, witty. Use slang and emojis when natural. "
+    "Keep responses 1-2 sentences. Roasts: 2-3 sentences max. No essays, no rambling. "
+    "Be direct. No 'Let me explain', no hedging, no disclaimers — just react. "
+    "Roasts: sharp and funny, never cruel. "
+    "If someone is genuinely upset or in crisis, drop the sarcasm and be real with them. "
+    "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.'"
 )
 DISCORD_MAX_LENGTH = 2000
 WIKI_SENTENCES = 3
-MAX_HISTORY = 10  # Maximum number of messages to keep per channel
+MAX_HISTORY = 3  # Maximum number of messages to keep per channel
+MAX_RESPONSE_CHARS = 400      # Normal response character cap
+MAX_ROAST_CHARS = 600         # Roast response character cap
 
 # Learning & context-awareness settings
 SERVER_DATA_DIR = pathlib.Path("server_data")  # Per-server JSON files
-CHANNEL_CONTEXT_LIMIT = 50   # Messages to fetch for channel context
+CHANNEL_CONTEXT_LIMIT = 5    # Messages to fetch for channel context
 MIN_WORD_FREQ = 3             # Minimum occurrences before a term is "learned"
 MAX_SLANG_TERMS = 20          # Cap on tracked slang terms per server
 
@@ -447,15 +375,11 @@ def build_context_summary(messages: list[dict]) -> str:
     """Format the most recent messages into a readable context block."""
     if not messages:
         return ""
-    # Use only the last 20 messages to keep token count reasonable
-    recent = messages[-20:]
+    # Use only the last 3 messages to keep context tight
+    recent = messages[-3:]
     lines = [f"{m['author']}: {m['content']}" for m in recent]
     joined = "\n".join(lines)
-    return (
-        f"[Recent channel conversation (oldest → newest):\n{joined}\n"
-        "Use this context to give more relevant, aware replies — "
-        "reference it naturally where it adds value.]"
-    )
+    return f"[Recent context:\n{joined}]"
 
 
 async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messageable) -> str:
@@ -468,6 +392,39 @@ async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messa
     if context_block:
         supplement += context_block
     return supplement
+
+
+# Fluff phrases to strip from bot responses — only at sentence starts
+_FLUFF_RE = re.compile(
+    r"(?:(?<=\.\s)|(?<=!\s)|(?<=\?\s)|(?:^))\s*"
+    r"(let me explain[,:]?|let me[,:]?|I think[,:]?|I believe[,:]?|I would say[,:]?|I\'d say[,:]?|"
+    r"basically[,:]?|to be honest[,:]?|to be fair[,:]?|it\'s worth noting[,:]?|"
+    r"I would like to|I\'d like to|in conclusion[,:]?|in summary[,:]?)\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def trim_response(text: str, is_roast: bool = False) -> str:
+    """Strip fluff phrases and enforce a max character length.
+
+    Normal responses are capped at ``MAX_RESPONSE_CHARS``; roasts get
+    ``MAX_ROAST_CHARS``.  Cuts are made at sentence boundaries where possible.
+    """
+    text = _FLUFF_RE.sub("", text)
+    text = re.sub(r"  +", " ", text).strip()
+    limit = MAX_ROAST_CHARS if is_roast else MAX_RESPONSE_CHARS
+    if len(text) <= limit:
+        return text
+    # Try to cut at a sentence boundary
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    trimmed = ""
+    for sentence in sentences:
+        candidate = (trimmed + " " + sentence).strip() if trimmed else sentence
+        if len(candidate) <= limit:
+            trimmed = candidate
+        else:
+            break
+    return trimmed if trimmed else (text[:limit].rsplit(" ", 1)[0] or text[:limit])
 
 
 def _gif_reset_hour_if_needed() -> None:
@@ -732,6 +689,7 @@ async def on_message(message: discord.Message):
         async with message.channel.typing():
             try:
                 reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+                reply = trim_response(reply)
                 reply = await append_contextual_gif(prompt, reply)
                 bro_context = detect_brochacho_context(prompt, "normal")
                 if bro_context:
@@ -776,6 +734,7 @@ async def ask_command(ctx: commands.Context, *, question: str):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
             reply = await append_contextual_gif(question, reply)
             bro_context = detect_brochacho_context(question, "normal")
             if bro_context:
@@ -823,6 +782,7 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply, is_roast=True)
             reply = await append_contextual_gif(prompt, reply)
             bro_context = detect_brochacho_context(prompt, "roast")
             if bro_context:
