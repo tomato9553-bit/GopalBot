@@ -3,8 +3,8 @@ import discord
 import logging
 import os
 import re
-import requests
 import wikipedia
+from mistralai.client import Mistral
 from discord.ext import commands
 
 # ---------------------------------------------------------------------------
@@ -25,9 +25,13 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise EnvironmentError("DISCORD_TOKEN environment variable is not set.")
 
-# Local Mistral API running on the owner's Victus PC (RTX 3050)
-LOCAL_API_URL = os.getenv("LOCAL_API_URL", "http://192.168.1.2:8000")
-LOCAL_API_TIMEOUT = 8  # seconds before treating PC as offline
+# Mistral AI Cloud API
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+
+if not MISTRAL_API_KEY:
+    raise EnvironmentError("MISTRAL_API_KEY environment variable is not set.")
+
+mistral_client = Mistral(api_key=MISTRAL_API_KEY)
 
 SYSTEM_PROMPT = (
     # ── Core Identity ──────────────────────────────────────────────────────────
@@ -40,7 +44,7 @@ SYSTEM_PROMPT = (
     "Write like a real Discord user, not a customer support script. "
     "Reference past messages naturally ('as you mentioned earlier…', 'going back to what you said about…'). "
     "When asked who made you, always say: 'I was created and owned by tomato9553-bit — I'm fully independent, "
-    "running on Mistral AI (not Meta) on my creator's own hardware. No corporate ties whatsoever.' "
+    "powered by Mistral AI cloud (not Meta, not OpenAI). No corporate ties whatsoever.' "
 
     # ── Humor & Roasting ───────────────────────────────────────────────────────
     "HUMOR & ROASTING: "
@@ -150,49 +154,31 @@ def record_message(channel_id: int, role: str, content: str) -> None:
     channel_history[channel_id].append({"role": role, "content": content})
 
 
-async def ask_local_api(prompt: str, history: list[dict] | None = None) -> str:
-    """Query the local Mistral API running on the owner's Victus PC.
-
-    Falls back to a friendly offline message if the PC is unreachable.
+async def ask_mistral_ai(prompt: str, history: list[dict] | None = None) -> str:
+    """Query the Mistral AI Cloud API.
 
     *history* is an optional list of previous {"role": ..., "content": ...}
     dicts that are included before the current user message so the model has
     conversation context.
     """
-    # Build the full conversation text.  The SYSTEM_PROMPT is sent as a
-    # separate "system" field in the request body; the history and current
-    # prompt are joined here so Ollama sees the conversation in one string.
-    context_parts = []
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     if history:
         for msg in history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            context_parts.append(f"{role}: {content}")
-    context_parts.append(f"user: {prompt}")
-    full_prompt = "\n".join(context_parts)
+            messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+    messages.append({"role": "user", "content": prompt})
 
     try:
-        response = requests.post(
-            f"{LOCAL_API_URL}/api/generate",
-            json={"prompt": full_prompt, "system": SYSTEM_PROMPT},
-            timeout=LOCAL_API_TIMEOUT,
+        response = await mistral_client.chat.complete_async(
+            model="mistral-large-latest",
+            messages=messages,
         )
-        if response.status_code == 200:
-            return response.json()["response"]
-        else:
-            logger.error("Local API returned status %s", response.status_code)
-            return "API error on my creator's PC, try again later 🔌"
-    except requests.exceptions.Timeout:
-        return "My creator's PC API timed out, try again in a moment ⏱️"
-    except requests.exceptions.ConnectionError:
-        return (
-            "My creator's PC is offline right now 🔌 "
-            "I'm powered by Mistral running on their Victus with RTX 3050 — "
-            "turn it on to chat with me properly! For now I'm on Railway only."
-        )
+        if not response.choices:
+            logger.error("Mistral AI returned no choices in response")
+            return "Sorry, I couldn't get a response from Mistral AI right now. 🤖"
+        return response.choices[0].message.content
     except Exception as exc:
-        logger.error("Local API error: %s", exc)
-        return f"Connection issue: {exc} 🔌"
+        logger.error("Mistral AI error: %s", exc)
+        return "Sorry, I couldn't get a response from Mistral AI right now. 🤖"
 
 # ---------------------------------------------------------------------------
 # Events
@@ -240,13 +226,13 @@ async def on_message(message: discord.Message):
         history = list(channel_history.get(channel_id, []))
         async with message.channel.typing():
             try:
-                reply = await ask_local_api(prompt, history=history)
+                reply = await ask_mistral_ai(prompt, history=history)
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
                 logger.info("Replied to %s successfully.", message.author)
             except Exception as exc:
-                logger.error("Local API error for %s: %s", message.author, exc, exc_info=True)
+                logger.error("Mistral AI error for %s: %s", message.author, exc, exc_info=True)
                 await message.channel.send("Sorry, something went wrong with the AI response!")
 
 
@@ -266,7 +252,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
 @bot.command(name="ask", brief="Ask GopalBot a question")
 async def ask_command(ctx: commands.Context, *, question: str):
-    """Ask GopalBot a question (powered by local Mistral AI).
+    """Ask GopalBot a question (powered by Mistral AI Cloud API).
 
     Example:
         !ask What is the speed of light?
@@ -276,7 +262,7 @@ async def ask_command(ctx: commands.Context, *, question: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_local_api(question, history=history)
+            reply = await ask_mistral_ai(question, history=history)
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -315,7 +301,7 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_local_api(prompt, history=history)
+            reply = await ask_mistral_ai(prompt, history=history)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
             record_message(channel_id, "assistant", reply)
