@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import wikipedia
-from mistralai import Mistral
+from mistralai.client import MistralClient
 from discord.ext import commands
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 if not MISTRAL_API_KEY:
     raise EnvironmentError("MISTRAL_API_KEY environment variable is not set.")
 
-mistral_client = Mistral(api_key=MISTRAL_API_KEY)
+mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
 
 SYSTEM_PROMPT = (
     # ── Core Identity ──────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ async def ask_mistral_ai(prompt: str, history: list[dict] | None = None) -> str:
 
     try:
         response = await asyncio.to_thread(
-            mistral_client.chat.complete,
+            mistral_client.chat,
             model="mistral-large-latest",
             messages=messages,
         )
