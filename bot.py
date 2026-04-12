@@ -1,10 +1,11 @@
+import asyncio
 import collections
 import discord
 import logging
 import os
 import re
 import wikipedia
-from mistralai.client import Mistral
+from mistralai import Mistral
 from discord.ext import commands
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,8 @@ async def ask_mistral_ai(prompt: str, history: list[dict] | None = None) -> str:
     messages.append({"role": "user", "content": prompt})
 
     try:
-        response = await mistral_client.chat.complete_async(
+        response = await asyncio.to_thread(
+            mistral_client.chat.complete,
             model="mistral-large-latest",
             messages=messages,
         )
