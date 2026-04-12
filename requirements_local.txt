@@ -1,0 +1,3 @@
+# Dependencies for local_api_server.py (runs on Victus PC, not Railway)
+flask>=3.0.0
+requests>=2.32.0
