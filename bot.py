@@ -40,6 +40,7 @@ mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
 
 # Tenor GIF API (optional — bot works fine without it)
 TENOR_API_KEY = os.getenv("TENOR_API_KEY")
+TENOR_REQUEST_TIMEOUT = 5  # seconds
 if not TENOR_API_KEY:
     logger.warning("TENOR_API_KEY is not set — GIF embedding will be disabled.")
 
@@ -342,7 +343,7 @@ async def search_tenor_gif(query: str) -> str | None:
     }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=TENOR_REQUEST_TIMEOUT)) as resp:
                 if resp.status != 200:
                     logger.warning("Tenor API returned status %s for query '%s'", resp.status, query)
                     return None
@@ -375,6 +376,11 @@ _FUNNY_KEYWORDS = frozenset({
     "😂", "🤣", "genius", "big brain", "legendary", "goat", "w", "based",
 })
 
+_ROAST_GIF_TERMS = ("roast reaction", "savage reaction", "mic drop")
+_STUPID_GIF_TERMS = ("facepalm", "confused reaction", "bruh moment")
+_CRINGE_GIF_TERMS = ("cringe", "awkward reaction", "yikes reaction")
+_FUNNY_GIF_TERMS  = ("laughing", "celebration", "this is fine meme")
+
 
 def detect_gif_context(prompt: str, reply: str) -> str | None:
     """Analyse the user's *prompt* and bot *reply* to decide whether to attach
@@ -387,20 +393,30 @@ def detect_gif_context(prompt: str, reply: str) -> str | None:
     # Roast replies almost always deserve a reaction GIF
     roast_indicators = ("roast", "savage", "brutal", "dragged", "cooked")
     if any(w in combined for w in roast_indicators):
-        return random.choice(["roast reaction", "savage reaction", "mic drop"])
+        return random.choice(_ROAST_GIF_TERMS)
 
     tokens = set(re.findall(r"\b\w+\b|[^\w\s]", combined))
 
     if tokens & _STUPID_QUESTION_KEYWORDS:
-        return random.choice(["facepalm", "confused reaction", "bruh moment"])
+        return random.choice(_STUPID_GIF_TERMS)
 
     if tokens & _CRINGE_KEYWORDS:
-        return random.choice(["cringe", "awkward reaction", "yikes reaction"])
+        return random.choice(_CRINGE_GIF_TERMS)
 
     if tokens & _FUNNY_KEYWORDS:
-        return random.choice(["laughing", "celebration", "this is fine meme"])
+        return random.choice(_FUNNY_GIF_TERMS)
 
     return None
+
+
+async def append_contextual_gif(prompt: str, reply: str) -> str:
+    """Return *reply* with a contextually appropriate GIF URL appended if one is found."""
+    gif_query = detect_gif_context(prompt, reply)
+    if gif_query:
+        gif_url = await search_tenor_gif(gif_query)
+        if gif_url:
+            return f"{reply}\n{gif_url}"
+    return reply
 
 
 async def ask_mistral_ai(
@@ -492,11 +508,7 @@ async def on_message(message: discord.Message):
         async with message.channel.typing():
             try:
                 reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
-                gif_query = detect_gif_context(prompt, reply)
-                if gif_query:
-                    gif_url = await search_tenor_gif(gif_query)
-                    if gif_url:
-                        reply = f"{reply}\n{gif_url}"
+                reply = await append_contextual_gif(prompt, reply)
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -535,11 +547,7 @@ async def ask_command(ctx: commands.Context, *, question: str):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
-            gif_query = detect_gif_context(question, reply)
-            if gif_query:
-                gif_url = await search_tenor_gif(gif_query)
-                if gif_url:
-                    reply = f"{reply}\n{gif_url}"
+            reply = await append_contextual_gif(question, reply)
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -581,11 +589,7 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
     async with ctx.typing():
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
-            gif_query = detect_gif_context(prompt, reply)
-            if gif_query:
-                gif_url = await search_tenor_gif(gif_query)
-                if gif_url:
-                    reply = f"{reply}\n{gif_url}"
+            reply = await append_contextual_gif(prompt, reply)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
             record_message(channel_id, "assistant", reply)
