@@ -38,11 +38,12 @@ if not MISTRAL_API_KEY:
 
 mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
 
-# Tenor GIF API (optional — bot works fine without it)
-TENOR_API_KEY = os.getenv("TENOR_API_KEY")
-TENOR_REQUEST_TIMEOUT = 5  # seconds
-if not TENOR_API_KEY:
-    logger.warning("TENOR_API_KEY is not set — GIF embedding will be disabled.")
+# Giphy GIF API (optional — bot works fine without it)
+# Free API key available at https://developers.giphy.com/
+GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
+GIPHY_REQUEST_TIMEOUT = 5  # seconds
+if not GIPHY_API_KEY:
+    logger.warning("GIPHY_API_KEY is not set — GIF embedding will be disabled.")
 
 SYSTEM_PROMPT = (
     # ── Core Identity ──────────────────────────────────────────────────────────
@@ -325,40 +326,41 @@ async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messa
     return supplement
 
 
-async def search_tenor_gif(query: str) -> str | None:
-    """Search Tenor for a GIF matching *query* and return a random result URL.
+async def search_giphy_gif(query: str) -> str | None:
+    """Search Giphy for a GIF matching *query* and return a random result URL.
 
     Returns ``None`` if the API key is not configured, no results are found,
     or any network/API error occurs.
     """
-    if not TENOR_API_KEY:
+    if not GIPHY_API_KEY:
         return None
-    url = "https://tenor.googleapis.com/v2/search"
+    url = "https://api.giphy.com/v1/gifs/search"
     params = {
         "q": query,
-        "key": TENOR_API_KEY,
+        "api_key": GIPHY_API_KEY,
         "limit": 10,
-        "media_filter": "gif",
-        "contentfilter": "medium",
+        "rating": "pg",
+        "lang": "en",
     }
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=TENOR_REQUEST_TIMEOUT)) as resp:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=GIPHY_REQUEST_TIMEOUT)) as resp:
                 if resp.status != 200:
-                    logger.warning("Tenor API returned status %s for query '%s'", resp.status, query)
+                    logger.warning("Giphy API returned status %s for query '%s'", resp.status, query)
                     return None
                 data = await resp.json()
-                results = data.get("results", [])
+                results = data.get("data", [])
                 if not results:
                     return None
                 pick = random.choice(results)
-                # Prefer the "gif" media format; fall back to the first available
-                media_formats = pick.get("media_formats", {})
-                gif_data = media_formats.get("gif") or next(iter(media_formats.values()), None)
-                if gif_data:
-                    return gif_data.get("url")
+                # Prefer animated formats in order of quality; skip static/still variants
+                images = pick.get("images", {})
+                for fmt in ("original", "downsized", "fixed_height", "fixed_width"):
+                    gif_data = images.get(fmt)
+                    if gif_data and gif_data.get("url"):
+                        return gif_data["url"]
     except Exception as exc:
-        logger.warning("Tenor GIF search failed for query '%s': %s", query, exc)
+        logger.warning("Giphy GIF search failed for query '%s': %s", query, exc)
     return None
 
 
@@ -386,7 +388,7 @@ def detect_gif_context(prompt: str, reply: str) -> str | None:
     """Analyse the user's *prompt* and bot *reply* to decide whether to attach
     a GIF and which search term to use.
 
-    Returns a Tenor search query string, or ``None`` if no GIF is warranted.
+    Returns a Giphy search query string, or ``None`` if no GIF is warranted.
     """
     combined = (prompt + " " + reply).lower()
 
@@ -413,7 +415,7 @@ async def append_contextual_gif(prompt: str, reply: str) -> str:
     """Return *reply* with a contextually appropriate GIF URL appended if one is found."""
     gif_query = detect_gif_context(prompt, reply)
     if gif_query:
-        gif_url = await search_tenor_gif(gif_query)
+        gif_url = await search_giphy_gif(gif_query)
         if gif_url:
             return f"{reply}\n{gif_url}"
     return reply
