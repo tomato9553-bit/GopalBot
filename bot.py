@@ -1,5 +1,7 @@
 import asyncio
 import collections
+import json
+import pathlib
 import discord
 import logging
 import os
@@ -115,6 +117,32 @@ DISCORD_MAX_LENGTH = 2000
 WIKI_SENTENCES = 3
 MAX_HISTORY = 10  # Maximum number of messages to keep per channel
 
+# Learning & context-awareness settings
+SERVER_DATA_DIR = pathlib.Path("server_data")  # Per-server JSON files
+CHANNEL_CONTEXT_LIMIT = 50   # Messages to fetch for channel context
+MIN_WORD_FREQ = 3             # Minimum occurrences before a term is "learned"
+MAX_SLANG_TERMS = 20          # Cap on tracked slang terms per server
+
+# English stop-words excluded from slang/phrase detection
+_STOP_WORDS = frozenset({
+    "the", "be", "to", "of", "and", "in", "that", "have", "it", "for",
+    "not", "on", "with", "he", "as", "you", "do", "at", "this", "but",
+    "his", "by", "from", "they", "we", "or", "an", "will", "my", "one",
+    "all", "would", "there", "their", "what", "so", "up", "out", "if",
+    "about", "who", "get", "which", "go", "me", "when", "make", "can",
+    "like", "time", "no", "just", "him", "know", "take", "people", "into",
+    "year", "your", "good", "some", "could", "them", "see", "other", "than",
+    "then", "now", "look", "only", "come", "its", "over", "think", "also",
+    "back", "after", "use", "two", "how", "our", "work", "first", "well",
+    "way", "even", "new", "want", "because", "any", "these", "give", "day",
+    "most", "us", "is", "are", "was", "were", "has", "had", "said", "did",
+    "been", "am", "yeah", "yes", "ok", "okay", "hey", "hi", "lol", "im",
+    "dont", "thats", "ive", "youre", "theyre", "actually", "really", "very",
+    "much", "more", "still", "too", "already", "here", "where", "again",
+    "got", "get", "going", "gonna", "wanna", "gotta", "right", "think",
+    "need", "feel", "said", "went", "come", "know", "tell", "sure", "never",
+})
+
 # ---------------------------------------------------------------------------
 # Bot setup
 # ---------------------------------------------------------------------------
@@ -123,6 +151,10 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=commands.De
 
 # Per-channel conversation history: {channel_id: deque of {"role": ..., "content": ...}}
 channel_history: dict[int, collections.deque] = {}
+
+# Per-server adaptive learning data (in-memory cache)
+# {guild_id: {"word_freq": Counter, "common_phrases": list[str]}}
+server_learning: dict[int, dict] = {}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -155,14 +187,147 @@ def record_message(channel_id: int, role: str, content: str) -> None:
     channel_history[channel_id].append({"role": role, "content": content})
 
 
-async def ask_mistral_ai(prompt: str, history: list[dict] | None = None) -> str:
+# ---------------------------------------------------------------------------
+# Per-server adaptive learning
+# ---------------------------------------------------------------------------
+
+def load_server_data(guild_id: int) -> dict:
+    """Load per-server learning data from disk (or return empty defaults)."""
+    path = SERVER_DATA_DIR / f"{guild_id}.json"
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            return {
+                "word_freq": collections.Counter(raw.get("word_freq", {})),
+                "common_phrases": raw.get("common_phrases", []),
+            }
+        except Exception as exc:
+            logger.warning("Could not load server data for guild %s: %s", guild_id, exc)
+    return {"word_freq": collections.Counter(), "common_phrases": []}
+
+
+def save_server_data(guild_id: int, data: dict) -> None:
+    """Persist per-server learning data to disk."""
+    SERVER_DATA_DIR.mkdir(exist_ok=True)
+    path = SERVER_DATA_DIR / f"{guild_id}.json"
+    try:
+        serialisable = {
+            "word_freq": dict(data["word_freq"]),
+            "common_phrases": data["common_phrases"],
+        }
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(serialisable, fh, indent=2)
+    except Exception as exc:
+        logger.warning("Could not save server data for guild %s: %s", guild_id, exc)
+
+
+def get_server_learning(guild_id: int) -> dict:
+    """Return the in-memory learning dict for *guild_id*, loading from disk if needed."""
+    if guild_id not in server_learning:
+        server_learning[guild_id] = load_server_data(guild_id)
+    return server_learning[guild_id]
+
+
+def update_server_learning(guild_id: int, messages: list[dict]) -> None:
+    """Update word-frequency counts and extract common phrases from *messages*."""
+    data = get_server_learning(guild_id)
+    for msg in messages:
+        content = msg.get("content", "").lower()
+        words = re.findall(r"\b[a-z]{3,}\b", content)
+        data["word_freq"].update(w for w in words if w not in _STOP_WORDS)
+
+    # Rebuild the top-N list from the updated counter
+    data["common_phrases"] = [
+        word
+        for word, count in data["word_freq"].most_common(MAX_SLANG_TERMS * 3)
+        if count >= MIN_WORD_FREQ and word not in _STOP_WORDS
+    ][:MAX_SLANG_TERMS]
+
+    save_server_data(guild_id, data)
+
+
+def build_server_context_section(guild_id: int | None) -> str:
+    """Return a server-culture blurb to append to the system prompt (empty if N/A)."""
+    if guild_id is None:
+        return ""
+    data = get_server_learning(guild_id)
+    phrases = data.get("common_phrases", [])
+    if not phrases:
+        return ""
+    return (
+        "SERVER CULTURE: The people in this server often use the following terms/phrases: "
+        f"{', '.join(phrases)}. "
+        "When appropriate, naturally mirror this vocabulary to match the community's vibe. "
+        "Adapt your tone and humour to fit the culture of this specific server. "
+    )
+
+
+# ---------------------------------------------------------------------------
+# Channel context helpers
+# ---------------------------------------------------------------------------
+
+async def fetch_channel_context(channel, limit: int = CHANNEL_CONTEXT_LIMIT) -> list[dict]:
+    """Fetch up to *limit* recent non-bot messages from *channel*."""
+    messages: list[dict] = []
+    try:
+        async for msg in channel.history(limit=limit, oldest_first=False):
+            if not msg.author.bot and msg.content.strip():
+                messages.append({
+                    "author": msg.author.display_name,
+                    "content": msg.content,
+                })
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        logger.warning("Could not fetch history for channel %s: %s", channel.id, exc)
+    # Return in chronological order (oldest first)
+    return list(reversed(messages))
+
+
+def build_context_summary(messages: list[dict]) -> str:
+    """Format the most recent messages into a readable context block."""
+    if not messages:
+        return ""
+    # Use only the last 20 messages to keep token count reasonable
+    recent = messages[-20:]
+    lines = [f"{m['author']}: {m['content']}" for m in recent]
+    joined = "\n".join(lines)
+    return (
+        f"[Recent channel conversation (oldest → newest):\n{joined}\n"
+        "Use this context to give more relevant, aware replies — "
+        "reference it naturally where it adds value.]"
+    )
+
+
+async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messageable) -> str:
+    """Fetch channel context, update learning, and return the full system-prompt supplement."""
+    channel_msgs = await fetch_channel_context(channel)
+    if guild_id is not None:
+        update_server_learning(guild_id, channel_msgs)
+    supplement = build_server_context_section(guild_id)
+    context_block = build_context_summary(channel_msgs)
+    if context_block:
+        supplement += context_block
+    return supplement
+
+
+async def ask_mistral_ai(
+    prompt: str,
+    history: list[dict] | None = None,
+    system_prompt_supplement: str = "",
+) -> str:
     """Query the Mistral AI Cloud API.
 
     *history* is an optional list of previous {"role": ..., "content": ...}
     dicts that are included before the current user message so the model has
     conversation context.
+
+    *system_prompt_supplement* is an optional string appended to the base
+    system prompt to inject per-server culture and channel context.
     """
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    full_system = SYSTEM_PROMPT
+    if system_prompt_supplement:
+        full_system = SYSTEM_PROMPT + "\n" + system_prompt_supplement
+    messages: list[dict] = [{"role": "system", "content": full_system}]
     if history:
         for msg in history:
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
@@ -225,10 +390,15 @@ async def on_message(message: discord.Message):
 
         logger.info("AI prompt from %s: %s", message.author, prompt)
         channel_id = message.channel.id
+        guild_id = message.guild.id if message.guild else None
+
+        # Fetch channel context, update learning, build enriched system-prompt supplement
+        supplement = await build_full_supplement(guild_id, message.channel)
+
         history = list(channel_history.get(channel_id, []))
         async with message.channel.typing():
             try:
-                reply = await ask_mistral_ai(prompt, history=history)
+                reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -261,10 +431,12 @@ async def ask_command(ctx: commands.Context, *, question: str):
     """
     logger.info("!ask from %s: %s", ctx.author, question)
     channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(question, history=history)
+            reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -300,10 +472,12 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
         "Keep it clever and funny — punchy, not mean. One paragraph max."
     )
     channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history)
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!roast {roast_subject}")
             record_message(channel_id, "assistant", reply)
