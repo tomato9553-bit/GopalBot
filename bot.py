@@ -3,6 +3,7 @@ import collections
 import json
 import pathlib
 import random
+import time
 import discord
 import logging
 import os
@@ -44,6 +45,22 @@ GIPHY_API_KEY = os.getenv("GIPHY_API_KEY")
 GIPHY_REQUEST_TIMEOUT = 5  # seconds
 if not GIPHY_API_KEY:
     logger.warning("GIPHY_API_KEY is not set — GIF embedding will be disabled.")
+
+# ---------------------------------------------------------------------------
+# GIF rate-limit handling, caching, and throttling state
+# ---------------------------------------------------------------------------
+# Simple in-memory cache: {query: gif_url}  (evicts oldest when full)
+GIF_CACHE: dict[str, str] = {}
+_GIF_CACHE_SIZE = 20          # Max cached entries
+_GIF_HOURLY_LIMIT = 42        # Giphy free tier requests per hour
+_GIF_WARN_THRESHOLD = 35      # Start skipping GIFs when this many requests used
+_GIF_THROTTLE_RATE = 3        # Embed GIF on every Nth "normal" response
+
+# Mutable state — module-level, only mutated from the asyncio event loop
+_gif_requests_this_hour: int = 0
+_gif_hour_start: float | None = None       # time.monotonic() snapshot
+_gif_rate_limited_until: float | None = None  # skip requests until this time
+_gif_message_counter: int = 0              # incremented per response for throttling
 
 SYSTEM_PROMPT = (
     # ── Core Identity ──────────────────────────────────────────────────────────
@@ -326,14 +343,52 @@ async def build_full_supplement(guild_id: int | None, channel: discord.abc.Messa
     return supplement
 
 
+def _gif_reset_hour_if_needed() -> None:
+    """Reset the hourly Giphy request counter when a full hour has passed."""
+    global _gif_requests_this_hour, _gif_hour_start
+    now = time.monotonic()
+    if _gif_hour_start is None or (now - _gif_hour_start) >= 3600:
+        if _gif_requests_this_hour:
+            logger.debug("Giphy hourly counter reset (was %d)", _gif_requests_this_hour)
+        _gif_requests_this_hour = 0
+        _gif_hour_start = now
+
+
 async def search_giphy_gif(query: str) -> str | None:
     """Search Giphy for a GIF matching *query* and return a random result URL.
 
-    Returns ``None`` if the API key is not configured, no results are found,
-    or any network/API error occurs.
+    Returns ``None`` if the API key is not configured, the rate limit has been
+    reached, no results are found, or any network/API error occurs.
+    Caches the last ``_GIF_CACHE_SIZE`` unique queries to reduce API calls.
     """
+    global _gif_requests_this_hour, _gif_rate_limited_until
+
     if not GIPHY_API_KEY:
         return None
+
+    # Honour an active rate-limit back-off period
+    if _gif_rate_limited_until is not None:
+        if time.monotonic() < _gif_rate_limited_until:
+            logger.debug("Giphy rate-limited; skipping GIF for query '%s'", query)
+            return None
+        _gif_rate_limited_until = None  # Back-off expired
+
+    # Reset hourly counter at the start of each new hour window
+    _gif_reset_hour_if_needed()
+
+    # Stop making requests when approaching the free-tier limit
+    if _gif_requests_this_hour >= _GIF_WARN_THRESHOLD:
+        logger.warning(
+            "Giphy request count %d/%d approaching limit; skipping GIF for query '%s'",
+            _gif_requests_this_hour, _GIF_HOURLY_LIMIT, query,
+        )
+        return None
+
+    # Return cached result if available
+    if query in GIF_CACHE:
+        logger.debug("GIF cache hit for query '%s'", query)
+        return GIF_CACHE[query]
+
     url = "https://api.giphy.com/v1/gifs/search"
     params = {
         "q": query,
@@ -345,9 +400,20 @@ async def search_giphy_gif(query: str) -> str | None:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=GIPHY_REQUEST_TIMEOUT)) as resp:
+                _gif_requests_this_hour += 1
+                logger.debug("Giphy request count: %d/%d", _gif_requests_this_hour, _GIF_HOURLY_LIMIT)
+
+                if resp.status == 429:
+                    _gif_rate_limited_until = time.monotonic() + 3600
+                    logger.warning(
+                        "Giphy API rate-limited (429) for query '%s'; pausing GIF requests for 1 hour", query
+                    )
+                    return None
+
                 if resp.status != 200:
                     logger.warning("Giphy API returned status %s for query '%s'", resp.status, query)
                     return None
+
                 data = await resp.json()
                 results = data.get("data", [])
                 if not results:
@@ -358,7 +424,12 @@ async def search_giphy_gif(query: str) -> str | None:
                 for fmt in ("original", "downsized", "fixed_height", "fixed_width"):
                     gif_data = images.get(fmt)
                     if gif_data and gif_data.get("url"):
-                        return gif_data["url"]
+                        gif_url = gif_data["url"]
+                        # Cache result; evict the oldest entry when the cache is full
+                        if len(GIF_CACHE) >= _GIF_CACHE_SIZE:
+                            GIF_CACHE.pop(next(iter(GIF_CACHE)))
+                        GIF_CACHE[query] = gif_url
+                        return gif_url
     except Exception as exc:
         logger.warning("Giphy GIF search failed for query '%s': %s", query, exc)
     return None
@@ -384,40 +455,64 @@ _CRINGE_GIF_TERMS = ("cringe", "awkward reaction", "yikes reaction")
 _FUNNY_GIF_TERMS  = ("laughing", "celebration", "this is fine meme")
 
 
-def detect_gif_context(prompt: str, reply: str) -> str | None:
+def should_embed_gif(response_type: str) -> bool:
+    """Return ``True`` when a GIF should be embedded for this response.
+
+    Key moments (roast, stupid question, cringe) always get a GIF.
+    Normal/funny responses are throttled to 1-in-``_GIF_THROTTLE_RATE`` to
+    conserve free-tier API quota.
+    """
+    global _gif_message_counter
+    _gif_message_counter += 1
+    if response_type in ("roast", "stupid_question", "cringe"):
+        return True
+    # Throttle "normal" responses — embed a GIF every Nth message
+    return (_gif_message_counter % _GIF_THROTTLE_RATE) == 0
+
+
+def detect_gif_context(prompt: str, reply: str) -> tuple[str, str] | None:
     """Analyse the user's *prompt* and bot *reply* to decide whether to attach
     a GIF and which search term to use.
 
-    Returns a Giphy search query string, or ``None`` if no GIF is warranted.
+    Returns a ``(giphy_query, response_type)`` tuple, or ``None`` if no GIF is
+    warranted.  *response_type* is one of ``"roast"``, ``"stupid_question"``,
+    ``"cringe"``, or ``"normal"``.
     """
     combined = (prompt + " " + reply).lower()
 
     # Roast replies almost always deserve a reaction GIF
     roast_indicators = ("roast", "savage", "brutal", "dragged", "cooked")
     if any(w in combined for w in roast_indicators):
-        return random.choice(_ROAST_GIF_TERMS)
+        return random.choice(_ROAST_GIF_TERMS), "roast"
 
     tokens = set(re.findall(r"\b\w+\b|[^\w\s]", combined))
 
     if tokens & _STUPID_QUESTION_KEYWORDS:
-        return random.choice(_STUPID_GIF_TERMS)
+        return random.choice(_STUPID_GIF_TERMS), "stupid_question"
 
     if tokens & _CRINGE_KEYWORDS:
-        return random.choice(_CRINGE_GIF_TERMS)
+        return random.choice(_CRINGE_GIF_TERMS), "cringe"
 
     if tokens & _FUNNY_KEYWORDS:
-        return random.choice(_FUNNY_GIF_TERMS)
+        return random.choice(_FUNNY_GIF_TERMS), "normal"
 
     return None
 
 
 async def append_contextual_gif(prompt: str, reply: str) -> str:
-    """Return *reply* with a contextually appropriate GIF URL appended if one is found."""
-    gif_query = detect_gif_context(prompt, reply)
-    if gif_query:
-        gif_url = await search_giphy_gif(gif_query)
-        if gif_url:
-            return f"{reply}\n{gif_url}"
+    """Return *reply* with a contextually appropriate GIF URL appended if one is found.
+
+    Uses ``should_embed_gif`` to throttle requests intelligently and
+    ``search_giphy_gif`` for rate-limit-aware, cached API calls.  Falls back
+    gracefully to plain text if no GIF is available.
+    """
+    context = detect_gif_context(prompt, reply)
+    if context:
+        gif_query, response_type = context
+        if should_embed_gif(response_type):
+            gif_url = await search_giphy_gif(gif_query)
+            if gif_url:
+                return f"{reply}\n{gif_url}"
     return reply
 
 
