@@ -1,6 +1,6 @@
 # GopalBot
 
-A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentions, direct messages, and any message containing its name with concise, friendly AI-generated replies. It also supports slash-style prefix commands for Wikipedia lookups and direct AI queries.
+A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentions, direct messages, and any message containing its name with intelligent, personality-rich AI replies. It combines conversational memory, Grok-style wit, data-driven opinions, emotional intelligence, and comprehensive political knowledge in one package.
 
 ## Features
 
@@ -8,7 +8,15 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 - Responds to direct messages (DMs)
 - Responds when its name (`gopalbot`) appears in a message
 - Powered by **LLaMA 3.3 70B** via the [Groq](https://groq.com/) API
+- **Chat History Memory** — remembers the last 10 messages per channel for context-aware replies
+- **Human-Like Personality** — casual, witty, uses emojis naturally, references past messages
+- **Grok-Style Humor & Roasting** — clever, self-aware humor; playful roasts on demand
+- **Data-Driven Opinions** — backs arguments with statistics and facts, clearly labels opinion vs. fact
+- **Emotional Intelligence & Empathy** — detects emotional tone, responds with care in serious situations, avoids humor when inappropriate
+- **Political Knowledge** — broad knowledge of global politics, ideologies, and current events with nuanced, balanced takes
+- **Israel-Palestine & Middle East** — fair, evidence-based discussion presenting both sides with empathy and honest assessment
 - **`!ask`** command for direct AI queries
+- **`!roast`** command for witty, playful roasts
 - **`!wiki`** command for Wikipedia summaries with rich embeds
 - Splits long responses across multiple messages (no more silent truncation)
 - Structured logging for easy debugging and monitoring
@@ -62,6 +70,7 @@ A Discord bot powered by Groq's LLaMA 3.3 70B model. GopalBot responds to mentio
 | Command | Description | Example |
 |---------|-------------|---------|
 | `!ask <question>` | Ask the Grok AI a question | `!ask What is gravity?` |
+| `!roast [target]` | Get a witty, playful roast | `!roast me` / `!roast @friend` |
 | `!wiki <query>` | Search Wikipedia for a summary | `!wiki Python programming` |
 | `!help` | List all available commands | `!help` |
 
