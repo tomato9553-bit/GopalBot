@@ -68,7 +68,9 @@ SYSTEM_PROMPT = (
     "Keep responses 1-2 sentences. Roasts: 2-3 sentences max. No essays, no rambling. "
     "Be direct. No 'Let me explain', no hedging, no disclaimers — just react. "
     "Roasts: sharp and funny, never cruel. "
-    "If someone is genuinely upset or in crisis, drop the sarcasm and be real with them. "
+    "TONE AWARENESS: When the topic is serious (war, death, tragedy, illness, abuse), drop ALL sarcasm "
+    "and humor — be respectful, empathetic, and factual. When someone asks for genuine help or advice, "
+    "give a real helpful answer first. When the vibe is casual and fun, bring the full sarcastic energy. "
     "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.'"
 )
 DISCORD_MAX_LENGTH = 2000
@@ -229,6 +231,105 @@ def get_brochacho_response(context: str) -> str:
     """Return a contextual Brochacho response."""
     responses = BROCHACHO_RESPONSES.get(context, BROCHACHO_RESPONSES["casual"])
     return random.choice(responses)
+
+
+# ---------------------------------------------------------------------------
+# Tone Detection
+# ---------------------------------------------------------------------------
+
+_SERIOUS_KEYWORDS = frozenset({
+    "war", "wars", "conflict", "conflicts", "violence", "violent", "killing",
+    "death", "deaths", "died", "dead", "killed", "murder", "casualties",
+    "tragedy", "tragic", "disaster", "accident", "shooting", "attack",
+    "illness", "disease", "cancer", "epidemic", "pandemic",
+    "abuse", "harm", "harassment", "trauma", "assault",
+    "genocide", "terrorism", "terrorist", "bomb", "explosion",
+    "depression", "suicide", "self-harm",
+    "poverty", "famine", "starvation", "crisis", "refugee",
+    "rape", "torture", "oppression", "massacre",
+})
+
+_QUESTION_PATTERNS = re.compile(
+    r"\b(how\s+to|how\s+do\s+i|how\s+can\s+i|how\s+should\s+i|"
+    r"what\s+is|what\s+are|what\s+does|what\s+should|"
+    r"can\s+you\s+explain|explain\s+to\s+me|tell\s+me\s+about|"
+    r"why\s+does|why\s+is|why\s+are|why\s+do|"
+    r"when\s+did|when\s+does|where\s+is|where\s+can|"
+    r"help\s+me|i\s+need\s+help|i\s+need\s+advice|"
+    r"should\s+i|can\s+you\s+help)\b",
+    re.IGNORECASE,
+)
+
+# Per-tone system-prompt injections appended during ask_mistral_ai calls
+_TONE_INSTRUCTIONS: dict[str, str] = {
+    "serious": (
+        "TONE OVERRIDE: This message is about a serious or sensitive topic. "
+        "Respond with respect, empathy, and facts ONLY. "
+        "Absolutely NO jokes, NO sarcasm, NO humor, NO sarcastically-used emojis. "
+        "Be genuinely compassionate and informative. This is non-negotiable."
+    ),
+    "question": (
+        "TONE OVERRIDE: The user is asking for help or information. "
+        "Give a direct, helpful, factual answer. "
+        "No jokes or sarcasm in this response — be genuinely useful and clear."
+    ),
+    "question_followup": (
+        "TONE OVERRIDE: The user is following up after a helpful answer. "
+        "You can now be warm, supportive, and add light encouragement or gentle humor."
+    ),
+    "casual": "",  # No override — default sarcastic Discord personality applies
+}
+
+# Per-channel question-mode state: True when the last bot response was to a question
+_channel_question_mode: dict[int, bool] = {}
+
+
+def detect_tone(message: str) -> str:
+    """Detect the tone category of *message*.
+
+    Returns one of:
+      ``"serious"``  — message is about a serious/sensitive topic
+      ``"question"`` — message is asking for help or information
+      ``"casual"``   — message is casual, fun, or general banter
+    """
+    lower = message.lower()
+    tokens = set(re.findall(r"\b\w+\b", lower))
+
+    # Question patterns are checked first so that advice-seeking messages
+    # about sensitive topics (e.g. "how do I deal with depression?") are
+    # handled as questions rather than raw serious statements.
+    if _QUESTION_PATTERNS.search(lower):
+        return "question"
+
+    # Serious topic keywords take second priority (statements about events).
+    if tokens & _SERIOUS_KEYWORDS:
+        return "serious"
+
+    return "casual"
+
+
+def _determine_effective_tone(channel_id: int, raw_tone: str) -> str:
+    """Map a raw detected tone to an effective response tone, accounting for
+    per-channel question follow-up state.
+
+    Updates ``_channel_question_mode`` as a side effect.
+
+    Returns one of ``"serious"``, ``"question"``, ``"question_followup"``,
+    or ``"casual"``.
+    """
+    in_question_mode = _channel_question_mode.get(channel_id, False)
+
+    if raw_tone == "question":
+        _channel_question_mode[channel_id] = True
+        return "question"
+    if raw_tone == "serious":
+        _channel_question_mode[channel_id] = False
+        return "serious"
+    if in_question_mode:
+        _channel_question_mode[channel_id] = False
+        return "question_followup"
+    _channel_question_mode[channel_id] = False
+    return "casual"
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +705,7 @@ async def ask_mistral_ai(
     prompt: str,
     history: list[dict] | None = None,
     system_prompt_supplement: str = "",
+    tone: str = "casual",
 ) -> str:
     """Query the Mistral AI Cloud API.
 
@@ -613,10 +715,17 @@ async def ask_mistral_ai(
 
     *system_prompt_supplement* is an optional string appended to the base
     system prompt to inject per-server culture and channel context.
+
+    *tone* controls an additional tone-override instruction injected into the
+    system prompt.  One of ``"serious"``, ``"question"``,
+    ``"question_followup"``, or ``"casual"`` (default).
     """
     full_system = SYSTEM_PROMPT
+    tone_instruction = _TONE_INSTRUCTIONS.get(tone, "")
+    if tone_instruction:
+        full_system = full_system + "\n" + tone_instruction
     if system_prompt_supplement:
-        full_system = SYSTEM_PROMPT + "\n" + system_prompt_supplement
+        full_system = full_system + "\n" + system_prompt_supplement
     messages: list[dict] = [{"role": "system", "content": full_system}]
     if history:
         for msg in history:
@@ -685,17 +794,26 @@ async def on_message(message: discord.Message):
         # Fetch channel context, update learning, build enriched system-prompt supplement
         supplement = await build_full_supplement(guild_id, message.channel)
 
+        # Determine tone and effective response strategy
+        raw_tone = detect_tone(prompt)
+        effective_tone = _determine_effective_tone(channel_id, raw_tone)
+        logger.info("Tone for channel %s: raw=%s effective=%s", channel_id, raw_tone, effective_tone)
+
         history = list(channel_history.get(channel_id, []))
         async with message.channel.typing():
             try:
-                reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+                reply = await ask_mistral_ai(
+                    prompt, history=history, system_prompt_supplement=supplement, tone=effective_tone
+                )
                 reply = trim_response(reply)
-                reply = await append_contextual_gif(prompt, reply)
-                bro_context = detect_brochacho_context(prompt, "normal")
-                if bro_context:
-                    reply = get_brochacho_response(bro_context) + "\n" + reply
-                if increment_message_counter():
-                    reply = get_n1gha_easter_egg("normal") + "\n" + reply
+                # Only add GIFs and easter eggs for casual/fun responses
+                if effective_tone not in ("serious", "question"):
+                    reply = await append_contextual_gif(prompt, reply)
+                    bro_context = detect_brochacho_context(prompt, "normal")
+                    if bro_context:
+                        reply = get_brochacho_response(bro_context) + "\n" + reply
+                    if increment_message_counter():
+                        reply = get_n1gha_easter_egg("normal") + "\n" + reply
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -730,17 +848,25 @@ async def ask_command(ctx: commands.Context, *, question: str):
     channel_id = ctx.channel.id
     guild_id = ctx.guild.id if ctx.guild else None
     supplement = await build_full_supplement(guild_id, ctx.channel)
+
+    # Determine tone
+    raw_tone = detect_tone(question)
+    effective_tone = _determine_effective_tone(channel_id, raw_tone)
+
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(question, history=history, system_prompt_supplement=supplement)
+            reply = await ask_mistral_ai(
+                question, history=history, system_prompt_supplement=supplement, tone=effective_tone
+            )
             reply = trim_response(reply)
-            reply = await append_contextual_gif(question, reply)
-            bro_context = detect_brochacho_context(question, "normal")
-            if bro_context:
-                reply = get_brochacho_response(bro_context) + "\n" + reply
-            if increment_message_counter():
-                reply = get_n1gha_easter_egg("normal") + "\n" + reply
+            if effective_tone not in ("serious", "question"):
+                reply = await append_contextual_gif(question, reply)
+                bro_context = detect_brochacho_context(question, "normal")
+                if bro_context:
+                    reply = get_brochacho_response(bro_context) + "\n" + reply
+                if increment_message_counter():
+                    reply = get_n1gha_easter_egg("normal") + "\n" + reply
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
