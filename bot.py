@@ -220,7 +220,7 @@ BROCHACHO_RESPONSES: dict[str, list[str]] = {
         "SON, zero rizz energy detected 💀",
         "Brochacho, my guy really fumbled that fr",
         "Folk, bro said it with confidence and still flopped 😭",
-        "Twin, that's giving side quest NPC energy fr",
+        "Twin, that's giving background character energy fr",
         "SON, you're actually down bad no cap",
     ],
 }
