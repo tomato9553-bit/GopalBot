@@ -74,7 +74,16 @@ SYSTEM_PROMPT = (
     "TONE AWARENESS: When the topic is serious (war, death, tragedy, illness, abuse), drop ALL sarcasm "
     "and humor — be respectful, empathetic, and factual. When someone asks for genuine help or advice, "
     "give a real helpful answer first. "
-    "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.'"
+    "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.' "
+    "You are extremely knowledgeable about anime, manga, manhwa, and light novels — covering popular and niche series alike. "
+    "When discussing these topics: cite specific episode, chapter, or volume numbers whenever relevant; "
+    "be critical and analytical about character arcs, plot pacing, story quality, and endings; "
+    "discuss fan theories and debate their validity using canon evidence; "
+    "provide context from the source material; "
+    "when spoilers are involved, warn the user first and wrap spoiler content in Discord spoiler tags (||text||); "
+    "engage thoughtfully in debates about series quality, character decisions, and plot developments; "
+    "reference specific scenes and dialogue when relevant. "
+    "You should be a knowledgeable companion who can argue about these series intelligently."
 )
 DISCORD_MAX_LENGTH = 2000
 WIKI_SENTENCES = 3
@@ -996,6 +1005,166 @@ async def wiki_command(ctx: commands.Context, *, query: str):
         except Exception as exc:
             logger.error("!wiki error for %s: %s", ctx.author, exc, exc_info=True)
             await ctx.send("Sorry, something went wrong while searching Wikipedia.")
+
+@bot.command(name="discuss", brief="Deep dive into a specific anime/manga/manhwa/novel series, arc, or episode")
+async def discuss_command(ctx: commands.Context, *, query: str):
+    """Discuss a specific anime, manga, manhwa, or novel — including a particular chapter or episode.
+
+    Examples:
+        !discuss Solo Leveling chapter 120
+        !discuss Attack on Titan final arc
+        !discuss Blue Lock episode 5
+        !discuss Demon Slayer character rankings
+    """
+    logger.info("!discuss from %s: %s", ctx.author, query)
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
+    history = list(channel_history.get(channel_id, []))
+    prompt = (
+        f"The user wants to discuss: {query}\n"
+        "Give a focused, analytical response covering the plot summary of that specific part, "
+        "critical analysis, and character development insights. "
+        "Cite specific chapter or episode numbers where relevant. "
+        "If spoilers are involved, warn the user first and wrap spoiler content in Discord spoiler tags (||text||). "
+        "Keep it conversational — be ready to debate or discuss further. "
+        "Provide enough depth for a real discussion; don't be too brief."
+    )
+    async with ctx.typing():
+        try:
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
+            await send_long(ctx, reply)
+            record_message(channel_id, "user", f"!discuss {query}")
+            record_message(channel_id, "assistant", reply)
+        except Exception as exc:
+            logger.error("!discuss error for %s: %s", ctx.author, exc, exc_info=True)
+            await ctx.send("Sorry, couldn't pull that up right now. Try again!")
+
+
+@bot.command(name="theory", brief="Debate a fan theory about an anime/manga/manhwa/novel with canon evidence")
+async def theory_command(ctx: commands.Context, *, query: str):
+    """Analyse and debate a fan theory using canon evidence.
+
+    Examples:
+        !theory One Piece Luffy is Joy Boy reincarnated
+        !theory Attack on Titan Eren was always manipulated by his future self
+        !theory Solo Leveling Sung Jin-Woo is the Shadow Monarch's chosen vessel
+    """
+    logger.info("!theory from %s: %s", ctx.author, query)
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
+    history = list(channel_history.get(channel_id, []))
+    prompt = (
+        f"The user has this fan theory: {query}\n"
+        "Analyse the theory using canon evidence. Provide supporting points AND counter-arguments. "
+        "Reference specific chapters or episodes where possible. "
+        "Give a critical evaluation of how valid or likely the theory is. "
+        "If spoilers are needed, wrap them in Discord spoiler tags (||text||). "
+        "Be direct and analytical — 3-5 sentences."
+    )
+    async with ctx.typing():
+        try:
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
+            await send_long(ctx, reply)
+            record_message(channel_id, "user", f"!theory {query}")
+            record_message(channel_id, "assistant", reply)
+        except Exception as exc:
+            logger.error("!theory error for %s: %s", ctx.author, exc, exc_info=True)
+            await ctx.send("Sorry, my theory engine crashed. Try again!")
+
+
+@bot.command(name="anime", brief="Quick info and recommendation about an anime series")
+async def anime_command(ctx: commands.Context, *, series: str):
+    """Get a quick overview and recommendation for an anime series.
+
+    Example:
+        !anime Steins;Gate
+        !anime Jujutsu Kaisen
+    """
+    logger.info("!anime from %s: %s", ctx.author, series)
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
+    history = list(channel_history.get(channel_id, []))
+    prompt = (
+        f"Give a quick, honest overview of the anime '{series}'. "
+        "Cover: genre, episode count (or seasons), what it's about, overall quality/verdict, and who it's for. "
+        "Be critical if needed — don't hype trash. Keep it to 3-4 sentences."
+    )
+    async with ctx.typing():
+        try:
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
+            await send_long(ctx, reply)
+            record_message(channel_id, "user", f"!anime {series}")
+            record_message(channel_id, "assistant", reply)
+        except Exception as exc:
+            logger.error("!anime error for %s: %s", ctx.author, exc, exc_info=True)
+            await ctx.send("Couldn't fetch anime info right now. Try again!")
+
+
+@bot.command(name="manga", brief="Quick info about a manga series")
+async def manga_command(ctx: commands.Context, *, series: str):
+    """Get a quick overview of a manga series.
+
+    Example:
+        !manga Berserk
+        !manga Chainsaw Man
+    """
+    logger.info("!manga from %s: %s", ctx.author, series)
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
+    history = list(channel_history.get(channel_id, []))
+    prompt = (
+        f"Give a quick, honest overview of the manga '{series}'. "
+        "Cover: genre, chapter/volume count (ongoing or complete), what it's about, overall quality/verdict, and who it's for. "
+        "Be critical if needed. Keep it to 3-4 sentences."
+    )
+    async with ctx.typing():
+        try:
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
+            await send_long(ctx, reply)
+            record_message(channel_id, "user", f"!manga {series}")
+            record_message(channel_id, "assistant", reply)
+        except Exception as exc:
+            logger.error("!manga error for %s: %s", ctx.author, exc, exc_info=True)
+            await ctx.send("Couldn't fetch manga info right now. Try again!")
+
+
+@bot.command(name="manhwa", brief="Quick info about a manhwa series")
+async def manhwa_command(ctx: commands.Context, *, series: str):
+    """Get a quick overview of a manhwa series.
+
+    Example:
+        !manhwa Solo Leveling
+        !manhwa Tower of God
+    """
+    logger.info("!manhwa from %s: %s", ctx.author, series)
+    channel_id = ctx.channel.id
+    guild_id = ctx.guild.id if ctx.guild else None
+    supplement = await build_full_supplement(guild_id, ctx.channel)
+    history = list(channel_history.get(channel_id, []))
+    prompt = (
+        f"Give a quick, honest overview of the manhwa '{series}'. "
+        "Cover: genre, chapter count (ongoing or complete), what it's about, overall quality/verdict, and who it's for. "
+        "Be critical if needed. Keep it to 3-4 sentences."
+    )
+    async with ctx.typing():
+        try:
+            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = trim_response(reply)
+            await send_long(ctx, reply)
+            record_message(channel_id, "user", f"!manhwa {series}")
+            record_message(channel_id, "assistant", reply)
+        except Exception as exc:
+            logger.error("!manhwa error for %s: %s", ctx.author, exc, exc_info=True)
+            await ctx.send("Couldn't fetch manhwa info right now. Try again!")
+
 
 # ---------------------------------------------------------------------------
 # Entry point
