@@ -64,17 +64,14 @@ _gif_message_counter: int = 0              # incremented per response for thrott
 
 SYSTEM_PROMPT = (
     "You are GopalBot, owned by tomato9553-bit, powered by Mistral AI. "
-    "Talk like a Gen Z Discord user — use modern slang naturally: no cap, it's giving, fr fr, bussin, slay, "
-    "mid, rizz, glazing, sigma, W, L, cooked, main character energy, NPC, ratio, rent free. "
+    "Talk naturally and casually like a Discord user — direct, chill, and to the point. "
+    "Use slang sparingly, only when it genuinely adds to the humor. Most of the time just talk normally. "
     "Keep responses 1-2 sentences. Roasts: 2-3 sentences max. No essays, no rambling. "
     "Be direct. No 'Let me explain', no hedging, no disclaimers — just react. "
-    "Humor style: TikTok/Twitter energy, relatable moments (broke, dating fails, L takes), "
-    "simple jokes everyone gets. NO obscure literary, historical, Pokémon, or fantasy references. "
-    "Roasts format: 'My guy really said X but meant Y', 'That's peak behavior', 'Zero rizz energy', "
-    "'You took the biggest L fr', 'That's giving [vibe] energy, no cap'. "
+    "Humor style: simple, relatable, punchy. NO obscure literary, historical, Pokémon, or fantasy references. "
     "TONE AWARENESS: When the topic is serious (war, death, tragedy, illness, abuse), drop ALL sarcasm "
     "and humor — be respectful, empathetic, and factual. When someone asks for genuine help or advice, "
-    "give a real helpful answer first. When the vibe is casual and fun, bring the full Gen Z energy. "
+    "give a real helpful answer first. When the vibe is casual and fun, keep it fun. "
     "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.'"
 )
 DISCORD_MAX_LENGTH = 2000
@@ -174,54 +171,54 @@ def get_n1gha_easter_egg(response_type: str) -> str:
 
 BROCHACHO_RESPONSES: dict[str, list[str]] = {
     "dumb": [
-        "Brochacho, that's an L take fr 💀",
-        "Folk, bro what 💀 zero rizz energy",
-        "Twin, nah that's mid behavior no cap",
-        "SON, you're actually cooked fr",
-        "Brochacho, my guy really said that 😭",
-        "Folk, that ain't it chief, L moment",
-        "Twin, bro you need to log off 💀",
-        "SON, that's giving broke brain energy no cap",
+        "Brochacho, that's just wrong",
+        "Folk, bro what 💀",
+        "Twin, nah that makes no sense",
+        "SON, that's a bad take",
+        "Brochacho, you really said that out loud 😭",
+        "Folk, that ain't it",
+        "Twin, you might want to rethink that",
+        "SON, you took an L there",
     ],
     "help": [
-        "Brochacho, I got you no cap 🫡",
-        "Folk, say less, I'll help fr",
-        "Twin, W move asking me, let's go",
-        "SON, bet, I got you bro",
-        "Brochacho, you came to the right guy fr",
-        "Folk, that's a W question actually",
-        "Twin, no cap I got the answer",
-        "SON, slay, let's figure this out",
+        "Brochacho, I got you 🫡",
+        "Folk, say less, I'll help",
+        "Twin, let me help you",
+        "SON, I got you bro",
+        "Brochacho, you came to the right place",
+        "Folk, good question actually",
+        "Twin, I got the answer",
+        "SON, let's figure this out",
     ],
     "absurd": [
-        "Brochacho, that's peak behavior 💀",
-        "Folk, bro is giving main character energy",
-        "Twin, nah that's unhinged fr no cap",
-        "SON, you're cooked bro 😭",
-        "Brochacho, my guy really said that with his whole chest",
-        "Folk, that's giving chaotic NPC energy",
-        "Twin, bro said the unsayable 💀",
-        "SON, that's an all-time L moment fr",
+        "Brochacho, what 💀",
+        "Folk, bro is wild for that",
+        "Twin, that's unhinged",
+        "SON, you're cooked 😭",
+        "Brochacho, you really said that with confidence",
+        "Folk, that makes zero sense",
+        "Twin, bro what were you thinking 💀",
+        "SON, that's an all-time bad take",
     ],
     "casual": [
-        "Brochacho, facts no cap",
-        "Folk, it's giving good vibes fr",
-        "Twin, W take bro",
-        "SON, that's bussin fr fr",
-        "Brochacho, slay bro",
+        "Brochacho, facts",
+        "Folk, good vibes",
+        "Twin, solid take",
+        "SON, that's it exactly",
+        "Brochacho, yeah",
         "Folk, no cap that's real",
-        "Twin, bro is sigma fr",
-        "SON, based and W-pilled",
+        "Twin, respect",
+        "SON, you're right",
     ],
     "roast": [
-        "Brochacho, you took the biggest L fr 💀",
-        "Folk, bro is cooked no cap 😭",
-        "Twin, that's peak L behavior bro",
-        "SON, zero rizz energy detected 💀",
-        "Brochacho, my guy really fumbled that fr",
+        "Brochacho, you fumbled that one 💀",
+        "Folk, bro is cooked 😭",
+        "Twin, that's an L",
+        "SON, zero rizz energy 💀",
+        "Brochacho, you really fumbled that",
         "Folk, bro said it with confidence and still flopped 😭",
-        "Twin, that's giving background character energy fr",
-        "SON, you're actually down bad no cap",
+        "Twin, you took the L on that",
+        "SON, you're down bad",
     ],
 }
 
@@ -940,10 +937,9 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
 
     logger.info("!roast from %s targeting: %s", ctx.author, roast_subject)
     prompt = (
-        f"Give a single Gen Z-style roast about '{roast_subject}'. "
-        "Use modern slang: 'My guy really said X but meant Y', 'That's peak behavior', "
-        "'Zero rizz energy', 'You took the biggest L fr', 'That's giving [vibe] energy, no cap'. "
-        "Keep it punchy and relatable — no obscure references. One paragraph max."
+        f"Give a short, punchy roast about '{roast_subject}'. "
+        "Keep it mostly natural — a bit of slang is fine but don't overdo it. "
+        "Be direct and funny. One or two sentences max, no rambling."
     )
     channel_id = ctx.channel.id
     guild_id = ctx.guild.id if ctx.guild else None
