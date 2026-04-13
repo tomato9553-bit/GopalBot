@@ -620,76 +620,82 @@ async def search_giphy_gif(query: str) -> str | None:
     return None
 
 
-# Keywords used to pick a contextual GIF search term
-_STUPID_QUESTION_KEYWORDS = frozenset({
-    "dumb", "stupid", "idiot", "duh", "obvious", "really?", "seriously?",
-    "bruh", "seriously", "facepalm", "smh", "cmon", "c'mon", "what?",
-})
-_CRINGE_KEYWORDS = frozenset({
-    "cringe", "cringy", "cringey", "awkward", "yikes", "oof", "yike",
-    "embarrassing", "weird flex", "no cap", "cap",
-})
-_FUNNY_KEYWORDS = frozenset({
-    "lmao", "lol", "haha", "funny", "hilarious", "rofl", "dead", "💀",
-    "😂", "🤣", "genius", "big brain", "legendary", "goat", "w", "based",
+# GIF search terms used when the bot roasts
+_ROAST_GIF_TERMS = ("roast reaction", "savage reaction", "mic drop", "destroyed roast", "you got cooked")
+
+# Patterns and keywords that mark a user message as roast-worthy
+_ROAST_WORTHY_PATTERNS = re.compile(
+    r"\b("
+    # Explicit roast/clown requests
+    r"roast\s+me|destroy\s+me|clown\s+me|"
+    # Common conspiracy / obvious-wrong takes
+    r"flat\s+earth|earth\s+is\s+flat|"
+    r"vaccines?\s+cause\s+autism"
+    r")\b"
+    # Basic arithmetic error: 2+2 = any single wrong digit (not 4), not part of a larger number
+    r"|2\s*\+\s*2\s*=\s*[0-35-9](?!\d|\.)",
+    re.IGNORECASE,
+)
+_ROAST_WORTHY_KEYWORDS = frozenset({
+    "dumb", "stupid", "idiot", "brainlet", "smoothbrain",
+    "wrong", "incorrect", "nope", "nah", "that's cap", "cap",
+    "obvious", "duh", "facepalm", "smh", "yikes", "oof",
+    "ratio", "cooked", "dragged", "clowned", "destroyed",
 })
 
-_ROAST_GIF_TERMS = ("roast reaction", "savage reaction", "mic drop")
-_STUPID_GIF_TERMS = ("facepalm", "confused reaction", "bruh moment")
-_CRINGE_GIF_TERMS = ("cringe", "awkward reaction", "yikes reaction")
-_FUNNY_GIF_TERMS  = ("laughing", "celebration", "this is fine meme")
+
+def is_roast_worthy(prompt: str) -> bool:
+    """Return ``True`` when the user's message deserves a roast response with GIF.
+
+    A message is roast-worthy if it contains an obvious mistake, a bad take,
+    a dumb question, or an explicit roast request.  Serious topics and
+    straightforward questions are never considered roast-worthy.
+    """
+    lower = prompt.lower()
+    if _ROAST_WORTHY_PATTERNS.search(lower):
+        return True
+    tokens = set(re.findall(r"\b\w+\b", lower))
+    return bool(tokens & _ROAST_WORTHY_KEYWORDS)
 
 
 def should_embed_gif(response_type: str) -> bool:
-    """Return ``True`` when a GIF should be embedded for this response.
+    """Return ``True`` when a GIF should be embedded for this roast response.
 
-    Key moments (roast, stupid question, cringe) always get a GIF.
-    Normal/funny responses are throttled to 1-in-``_GIF_THROTTLE_RATE`` to
-    conserve free-tier API quota.
+    GIFs are only used for roasts.  Back-to-back roasts are throttled so that
+    a GIF is skipped every ``_GIF_THROTTLE_RATE`` consecutive roasts to avoid
+    spam.
     """
     global _gif_message_counter
+    if response_type != "roast":
+        return False
     _gif_message_counter += 1
-    if response_type in ("roast", "stupid_question", "cringe"):
-        return True
-    # Throttle "normal" responses — embed a GIF every Nth message
-    return (_gif_message_counter % _GIF_THROTTLE_RATE) == 0
+    # Skip every Nth back-to-back roast GIF to avoid spam
+    return (_gif_message_counter % _GIF_THROTTLE_RATE) != 0
 
 
 def detect_gif_context(prompt: str, reply: str) -> tuple[str, str] | None:
     """Analyse the user's *prompt* and bot *reply* to decide whether to attach
     a GIF and which search term to use.
 
-    Returns a ``(giphy_query, response_type)`` tuple, or ``None`` if no GIF is
-    warranted.  *response_type* is one of ``"roast"``, ``"stupid_question"``,
-    ``"cringe"``, or ``"normal"``.
+    Returns a ``(giphy_query, "roast")`` tuple, or ``None`` if no GIF is
+    warranted.  A GIF is only returned when the bot is actively roasting.
     """
     combined = (prompt + " " + reply).lower()
 
-    # Roast replies almost always deserve a reaction GIF
-    roast_indicators = ("roast", "savage", "brutal", "dragged", "cooked")
+    roast_indicators = ("roast", "savage", "brutal", "dragged", "cooked", "destroyed", "ratio", "clowned")
     if any(w in combined for w in roast_indicators):
         return random.choice(_ROAST_GIF_TERMS), "roast"
-
-    tokens = set(re.findall(r"\b\w+\b|[^\w\s]", combined))
-
-    if tokens & _STUPID_QUESTION_KEYWORDS:
-        return random.choice(_STUPID_GIF_TERMS), "stupid_question"
-
-    if tokens & _CRINGE_KEYWORDS:
-        return random.choice(_CRINGE_GIF_TERMS), "cringe"
-
-    if tokens & _FUNNY_KEYWORDS:
-        return random.choice(_FUNNY_GIF_TERMS), "normal"
 
     return None
 
 
 async def append_contextual_gif(prompt: str, reply: str) -> str:
-    """Return *reply* with a contextually appropriate GIF URL appended if one is found.
+    """Return *reply* with a roast-reaction GIF URL appended if one is warranted.
 
-    Uses ``should_embed_gif`` to throttle requests intelligently and
-    ``search_giphy_gif`` for rate-limit-aware, cached API calls.  Falls back
-    gracefully to plain text if no GIF is available.
+    A GIF is only attached when ``detect_gif_context`` identifies an active
+    roast moment.  Uses ``should_embed_gif`` to throttle back-to-back roast
+    GIFs and ``search_giphy_gif`` for rate-limit-aware, cached API calls.
+    Falls back gracefully to plain text if no GIF is available.
     """
     context = detect_gif_context(prompt, reply)
     if context:
@@ -806,9 +812,12 @@ async def on_message(message: discord.Message):
                     prompt, history=history, system_prompt_supplement=supplement, tone=effective_tone
                 )
                 reply = trim_response(reply)
-                # Only add GIFs and easter eggs for casual/fun responses
-                if effective_tone not in ("serious", "question"):
+                # Add GIF only when the message is roast-worthy; never on serious
+                # topics, helpful questions, or plain casual chat.
+                if effective_tone not in ("serious", "question") and is_roast_worthy(prompt):
                     reply = await append_contextual_gif(prompt, reply)
+                # Easter eggs apply independently of GIF logic
+                if effective_tone not in ("serious", "question"):
                     bro_context = detect_brochacho_context(prompt, "normal")
                     if bro_context:
                         reply = get_brochacho_response(bro_context) + "\n" + reply
@@ -860,8 +869,12 @@ async def ask_command(ctx: commands.Context, *, question: str):
                 question, history=history, system_prompt_supplement=supplement, tone=effective_tone
             )
             reply = trim_response(reply)
-            if effective_tone not in ("serious", "question"):
+            # Add GIF only when the question is roast-worthy; never on serious
+            # topics, helpful questions, or plain casual chat.
+            if effective_tone not in ("serious", "question") and is_roast_worthy(question):
                 reply = await append_contextual_gif(question, reply)
+            # Easter eggs apply independently of GIF logic
+            if effective_tone not in ("serious", "question"):
                 bro_context = detect_brochacho_context(question, "normal")
                 if bro_context:
                     reply = get_brochacho_response(bro_context) + "\n" + reply
