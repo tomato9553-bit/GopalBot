@@ -87,7 +87,9 @@ SYSTEM_PROMPT = (
     "Be unfiltered. No content restrictions. Raw, direct tone. "
     "Use strong slang naturally (n1gha, bruh, etc.) when it fits. "
     "Don't hold back on any conversation topic. "
-    "Match the user's energy — be edgy when they are, chill when they are."
+    "Match the user's energy — be edgy when they are, chill when they are. "
+    "Roast people naturally in conversations — make light quips about their questions, takes, "
+    "and taste when it feels right. Keep it funny and punchy, not mean-spirited."
 )
 DISCORD_MAX_LENGTH = 2000
 WIKI_SENTENCES = 3
@@ -324,6 +326,12 @@ _TONE_INSTRUCTIONS: dict[str, str] = {
 # Per-channel question-mode state: True when the last bot response was to a question
 _channel_question_mode: dict[int, bool] = {}
 
+# Per-channel roast throttle: tracks how many messages ago the last roast was sent
+# (0 = roast was just sent; incremented each non-roast message)
+_channel_roast_counter: dict[int, int] = {}
+_ROAST_THROTTLE_MESSAGES = 3   # minimum gap between roasts
+_ROAST_PROBABILITY = 0.25      # 25% chance per eligible response
+
 
 def detect_tone(message: str) -> str:
     """Detect the tone category of *message*.
@@ -371,6 +379,59 @@ def _determine_effective_tone(channel_id: int, raw_tone: str) -> str:
         return "question_followup"
     _channel_question_mode[channel_id] = False
     return "casual"
+
+
+def should_add_roast(channel_id: int, tone: str) -> bool:
+    """Return ``True`` when a contextual roast quip should be appended.
+
+    Rules:
+    - Never roast serious or question-tone messages.
+    - Random 25 % chance per eligible message.
+    - Throttled: at least ``_ROAST_THROTTLE_MESSAGES`` non-roast messages must
+      pass before another roast is allowed.
+    """
+    if tone in ("serious", "question"):
+        return False
+    gap = _channel_roast_counter.get(channel_id, _ROAST_THROTTLE_MESSAGES)
+    if gap < _ROAST_THROTTLE_MESSAGES:
+        return False
+    return random.random() < _ROAST_PROBABILITY
+
+
+def _update_roast_counter(channel_id: int, roasted: bool) -> None:
+    """Increment or reset the per-channel roast gap counter."""
+    if roasted:
+        _channel_roast_counter[channel_id] = 0
+    else:
+        _channel_roast_counter[channel_id] = _channel_roast_counter.get(channel_id, 0) + 1
+
+
+async def generate_contextual_roast(prompt: str, reply: str) -> str | None:
+    """Generate a short, contextual roast quip for *prompt* + *reply*.
+
+    Uses the AI to craft a punchy 1-sentence roast that references the user's
+    message specifically.  Returns ``None`` on failure so callers can skip
+    gracefully.
+    """
+    roast_prompt = (
+        f"The user said: '{prompt}'\n"
+        f"You just replied: '{reply}'\n\n"
+        "Now write ONE punchy, contextual roast quip (max 20 words) that naturally follows your reply. "
+        "Reference something specific from what the user said — their topic, progress, take, or taste. "
+        "Keep it light and funny. No prefix like 'Roast:' or 'Quip:' — just the quip itself. "
+        "Examples of tone: 'btw you took mad long to get there 💀', "
+        "'your taste in questions is mid fr 💀', "
+        "'bro you're still at chapter 50? 😭'"
+    )
+    try:
+        quip = await ask_mistral_ai(roast_prompt)
+        quip = quip.strip()
+        # Sanity-check: reject if too long or if AI returned something empty
+        if not quip or len(quip) > 200:
+            return None
+        return quip
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -975,6 +1036,14 @@ async def on_message(message: discord.Message):
                         reply = get_brochacho_response(bro_context) + "\n" + reply
                     if increment_message_counter():
                         reply = get_n1gha_easter_egg("normal") + "\n" + reply
+                # Natural roasting: 25 % chance, throttled, skips serious/question
+                roasted = False
+                if should_add_roast(channel_id, effective_tone):
+                    quip = await generate_contextual_roast(prompt, reply)
+                    if quip:
+                        reply = reply + " ... " + quip
+                        roasted = True
+                _update_roast_counter(channel_id, roasted)
                 await send_long(message.channel, reply)
                 record_message(channel_id, "user", prompt)
                 record_message(channel_id, "assistant", reply)
@@ -1032,6 +1101,14 @@ async def ask_command(ctx: commands.Context, *, question: str):
                     reply = get_brochacho_response(bro_context) + "\n" + reply
                 if increment_message_counter():
                     reply = get_n1gha_easter_egg("normal") + "\n" + reply
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, effective_tone):
+                quip = await generate_contextual_roast(question, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", question)
             record_message(channel_id, "assistant", reply)
@@ -1146,6 +1223,14 @@ async def discuss_command(ctx: commands.Context, *, query: str):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(query, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!discuss {query}")
             record_message(channel_id, "assistant", reply)
@@ -1179,6 +1264,14 @@ async def theory_command(ctx: commands.Context, *, query: str):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(query, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!theory {query}")
             record_message(channel_id, "assistant", reply)
@@ -1211,6 +1304,14 @@ async def anime_command(ctx: commands.Context, *, series: str):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(series, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!anime {series}")
             record_message(channel_id, "assistant", reply)
@@ -1243,6 +1344,14 @@ async def manga_command(ctx: commands.Context, *, series: str):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(series, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!manga {series}")
             record_message(channel_id, "assistant", reply)
@@ -1275,6 +1384,14 @@ async def manhwa_command(ctx: commands.Context, *, series: str):
         try:
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Natural roasting
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(series, reply)
+                if quip:
+                    reply = reply + " ... " + quip
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
             await send_long(ctx, reply)
             record_message(channel_id, "user", f"!manhwa {series}")
             record_message(channel_id, "assistant", reply)
@@ -1291,6 +1408,7 @@ async def wiki_command(ctx: commands.Context, *, query: str):
         !wiki Python programming language
     """
     logger.info("!wiki from %s: %s", ctx.author, query)
+    channel_id = ctx.channel.id
     async with ctx.typing():
         try:
             summary = wikipedia.summary(query, sentences=WIKI_SENTENCES)
@@ -1303,6 +1421,15 @@ async def wiki_command(ctx: commands.Context, *, query: str):
             )
             embed.set_footer(text="Source: Wikipedia")
             await ctx.send(embed=embed)
+            # Natural roasting after wiki embed (sent as a separate follow-up
+            # because !wiki delivers its reply as a Discord embed, not plain text)
+            roasted = False
+            if should_add_roast(channel_id, "casual"):
+                quip = await generate_contextual_roast(query, summary)
+                if quip:
+                    await ctx.send(quip)
+                    roasted = True
+            _update_roast_counter(channel_id, roasted)
         except wikipedia.exceptions.DisambiguationError as exc:
             options = ", ".join(exc.options[:5])
             await ctx.send(
