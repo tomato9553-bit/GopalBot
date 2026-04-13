@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 .env
 server_data/
+user_data/
