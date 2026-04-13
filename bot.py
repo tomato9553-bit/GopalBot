@@ -871,7 +871,11 @@ async def fetch_anilist_data(series_name: str, media_type: str = "MANGA") -> dic
         "score": media.get("averageScore"),
         "genres": media.get("genres", []),
         "country": media.get("countryOfOrigin"),
-        "staff": [n.get("name", {}).get("full") for n in (media.get("staff") or {}).get("nodes", [])],
+        "staff": [
+            n.get("name", {}).get("full")
+            for n in (media.get("staff") or {}).get("nodes", [])
+            if isinstance(n, dict)
+        ],
     }
     _ANILIST_CACHE[cache_key] = (now, data)
     return data
