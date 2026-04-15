@@ -881,8 +881,7 @@ async def ask_mistral_ai(
     messages.append({"role": "user", "content": prompt})
 
     try:
-        response = await asyncio.to_thread(
-            mistral_client.chat,
+        response = await mistral_client.chat.complete_async(
             model="mistral-large-latest",
             messages=messages,
         )
