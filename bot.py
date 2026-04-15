@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import aiohttp
-from mistralai.client import MistralClient
+from mistralai.client import Mistral
 import wikipedia
 from discord.ext import commands
 
@@ -62,7 +62,7 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 if not MISTRAL_API_KEY:
     raise EnvironmentError("MISTRAL_API_KEY environment variable is not set.")
 
-mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+mistral_client = Mistral(api_key=MISTRAL_API_KEY)
 
 # Giphy GIF API (optional — bot works fine without it)
 # Free API key available at https://developers.giphy.com/
