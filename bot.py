@@ -1,10 +1,12 @@
 import asyncio
 import collections
 import datetime
+import io
 import json
 import pathlib
 import random
 import time
+import urllib.parse
 import discord
 import logging
 import os
@@ -13,6 +15,23 @@ import aiohttp
 from mistralai.client import MistralClient
 import wikipedia
 from discord.ext import commands
+
+try:
+    from PIL import Image as _PILImage
+    import pytesseract as _pytesseract
+    _IMAGE_PROCESSING_AVAILABLE = True
+except ImportError:
+    _IMAGE_PROCESSING_AVAILABLE = False
+    logger_pre = logging.getLogger("GopalBot")
+    logger_pre.warning("PIL/pytesseract not available — image OCR disabled.")
+
+try:
+    from bs4 import BeautifulSoup as _BeautifulSoup
+    _BS4_AVAILABLE = True
+except ImportError:
+    _BS4_AVAILABLE = False
+    logger_pre = logging.getLogger("GopalBot")
+    logger_pre.warning("beautifulsoup4 not available — web scraping disabled.")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -880,6 +899,7 @@ _ANILIST_URL = "https://graphql.anilist.co"
 _ANILIST_QUERY = """
 query ($search: String, $type: MediaType) {
   Media(search: $search, type: $type, sort: SEARCH_MATCH) {
+    id
     title { romaji english native }
     type
     format
@@ -937,6 +957,7 @@ async def fetch_anilist_data(series_name: str, media_type: str = "MANGA") -> dic
 
     title_obj = media.get("title") or {}
     data = {
+        "id": media.get("id"),
         "title": title_obj.get("english") or title_obj.get("romaji") or series_name,
         "title_romaji": title_obj.get("romaji"),
         "type": media.get("type"),
@@ -986,6 +1007,149 @@ def _build_series_context(data: dict, requested_chapter: int | None = None) -> s
         else:
             parts.append(f"Requested chapter {requested_chapter} is within the known range.")
     return "\n".join(parts)
+
+# ---------------------------------------------------------------------------
+# Link Generation
+# ---------------------------------------------------------------------------
+
+_URL_SAFE_RE = re.compile(r"[^a-zA-Z0-9\s\-]")
+
+
+def generate_series_links(series_name: str, anilist_id: int | None = None, media_type: str | None = None) -> str:
+    """Generate markdown links to major manga/anime databases for *series_name*.
+
+    If *anilist_id* is provided a direct AniList link is included.
+    *media_type* should be ``"ANIME"`` or ``"MANGA"`` (or ``None``) and controls
+    whether the AniList link points to the anime or manga section.
+    """
+    encoded = urllib.parse.quote(series_name)
+    slug = _URL_SAFE_RE.sub("", series_name).strip().replace(" ", "-").lower()
+    links: list[str] = []
+
+    # AniList — direct link if we have an ID, otherwise search
+    if anilist_id:
+        section = "anime" if media_type == "ANIME" else "manga"
+        links.append(f"[AniList](https://anilist.co/{section}/{anilist_id})")
+    else:
+        links.append(f"[AniList](https://anilist.co/search/manga?search={encoded})")
+
+    # MyAnimeList
+    links.append(f"[MAL](https://myanimelist.net/manga.php?q={encoded})")
+
+    # MangaDex
+    links.append(f"[MangaDex](https://mangadex.org/search?query={encoded})")
+
+    # NovelUpdates
+    links.append(f"[NovelUpdates](https://www.novelupdates.com/series/{slug})")
+
+    # Reddit discussions
+    links.append(f"[Reddit](https://reddit.com/r/manga/search?q={encoded})")
+
+    return " | ".join(links)
+
+
+# ---------------------------------------------------------------------------
+# Web Scraping
+# ---------------------------------------------------------------------------
+
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_WEB_FETCH_TIMEOUT = 10  # seconds
+
+
+async def fetch_webpage_content(url: str, max_chars: int = 2000) -> dict:
+    """Fetch and parse the plain-text content of *url*.
+
+    Returns a dict with keys ``success``, ``title``, ``url``, ``content``
+    on success or ``error`` on failure.
+    """
+    if not _BS4_AVAILABLE:
+        return {"error": "Web scraping is not available (beautifulsoup4 not installed)."}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=_WEB_FETCH_TIMEOUT),
+                headers={"User-Agent": "GopalBot/1.0 (Discord bot)"},
+            ) as resp:
+                if resp.status != 200:
+                    return {"error": f"HTTP {resp.status}"}
+                html = await resp.text()
+
+        soup = _BeautifulSoup(html, "html.parser")
+
+        # Extract title
+        title: str = (soup.title.string.strip() if soup.title and soup.title.string else "Unknown")
+
+        # Strip navigation/boilerplate tags
+        for tag in soup(["script", "style", "nav", "footer", "noscript", "header", "aside"]):
+            tag.decompose()
+
+        # Collect clean lines
+        text = soup.get_text(separator="\n", strip=True)
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        content = "\n".join(lines[:25])
+        if len(content) > max_chars:
+            content = content[:max_chars] + "…"
+
+        return {"success": True, "title": title, "url": url, "content": content}
+    except Exception as exc:
+        logger.error("Web fetch error for %s: %s", url, exc)
+        return {"error": f"Could not fetch page: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# Image Processing
+# ---------------------------------------------------------------------------
+
+_IMAGE_FETCH_TIMEOUT = 10  # seconds
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB safety limit
+
+
+async def process_image(image_url: str) -> dict:
+    """Download a Discord attachment image and analyse it.
+
+    Returns a dict with keys ``success``, ``text``, ``description``, ``size``
+    on success or ``error`` on failure.  OCR is only attempted when
+    pytesseract/PIL are installed; otherwise only basic metadata is reported.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                image_url,
+                timeout=aiohttp.ClientTimeout(total=_IMAGE_FETCH_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    return {"error": f"Could not download image (HTTP {resp.status})"}
+                image_data = await resp.read()
+
+        if len(image_data) > _MAX_IMAGE_BYTES:
+            return {"error": "Image is too large to process (>10 MB)."}
+
+        if not _IMAGE_PROCESSING_AVAILABLE:
+            return {
+                "success": True,
+                "text": "",
+                "description": f"Image downloaded ({len(image_data):,} bytes). Install Pillow & pytesseract for OCR.",
+                "size": None,
+            }
+
+        image = _PILImage.open(io.BytesIO(image_data))
+        size = image.size
+        fmt = image.format or "unknown"
+
+        # OCR — wrap in its own try so a tesseract failure doesn't break the whole thing
+        ocr_text = ""
+        try:
+            ocr_text = _pytesseract.image_to_string(image).strip()
+        except Exception as ocr_exc:
+            logger.warning("OCR failed: %s", ocr_exc)
+
+        description = f"Format: {fmt} | Size: {size[0]}×{size[1]} px"
+        return {"success": True, "text": ocr_text, "description": description, "size": size}
+    except Exception as exc:
+        logger.error("Image processing error: %s", exc)
+        return {"error": f"Could not process image: {exc}"}
+
 
 # ---------------------------------------------------------------------------
 # User Profile System
@@ -1238,11 +1402,52 @@ async def on_message(message: discord.Message):
     has_bot_name = "gopalbot" in message.content.lower()
     is_dm = isinstance(message.channel, discord.DMChannel)
 
+    # Auto-analyse image attachments when the bot is mentioned / addressed
+    if (bot_mentioned or has_bot_name or is_dm) and message.attachments:
+        image_attachments = [
+            att for att in message.attachments
+            if att.content_type and att.content_type.startswith("image/")
+        ]
+        if image_attachments:
+            async with message.channel.typing():
+                results = []
+                for att in image_attachments[:3]:  # Process up to 3 images
+                    result = await process_image(att.url)
+                    if result.get("success"):
+                        parts = [f"📸 **{att.filename}** — {result['description']}"]
+                        if result.get("text"):
+                            text_preview = result["text"][:500]
+                            parts.append(f"📝 **Extracted text:**\n```\n{text_preview}\n```")
+                        else:
+                            parts.append("📝 No text detected in image.")
+                        results.append("\n".join(parts))
+                    else:
+                        results.append(f"⚠️ Could not process **{att.filename}**: {result.get('error')}")
+                await send_long(message.channel, "\n\n".join(results))
+            return
+
     if bot_mentioned or has_bot_name or is_dm:
         prompt = message.content
         prompt = prompt.replace(f"<@{bot.user.id}>", "").strip()
         prompt = prompt.replace(f"<@!{bot.user.id}>", "").strip()
         prompt = re.sub(r"gopalbot", "", prompt, count=1, flags=re.IGNORECASE).strip()
+
+        # If the cleaned prompt is just a URL, offer to summarise it
+        url_match = _URL_PATTERN.fullmatch(prompt.strip()) if prompt else None
+        if url_match:
+            url = url_match.group(0)
+            async with message.channel.typing():
+                result = await fetch_webpage_content(url)
+                if result.get("success"):
+                    reply = (
+                        f"🌐 **{result['title']}**\n"
+                        f"{result['content']}\n\n"
+                        f"🔗 {result['url']}"
+                    )
+                else:
+                    reply = f"⚠️ Could not fetch that URL: {result.get('error')}"
+            await send_long(message.channel, reply)
+            return
 
         if not prompt:
             await message.channel.send("Hi! Ask me anything, or use `!help` to see my commands.")
@@ -1558,8 +1763,13 @@ async def anime_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
+            api_data = await fetch_anilist_data(series, "ANIME")
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Append database links
+            anilist_id = api_data.get("id") if api_data else None
+            links = generate_series_links(series, anilist_id=anilist_id, media_type="ANIME")
+            reply = reply + f"\n\n🔗 **Links:** {links}"
             # Natural roasting
             roasted = False
             if should_add_roast(channel_id, "casual"):
@@ -1598,8 +1808,13 @@ async def manga_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
+            api_data = await fetch_anilist_data(series, "MANGA")
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Append database links
+            anilist_id = api_data.get("id") if api_data else None
+            links = generate_series_links(series, anilist_id=anilist_id, media_type="MANGA")
+            reply = reply + f"\n\n🔗 **Links:** {links}"
             # Natural roasting
             roasted = False
             if should_add_roast(channel_id, "casual"):
@@ -1638,8 +1853,13 @@ async def manhwa_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
+            api_data = await fetch_anilist_data(series, "MANGA")
             reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
+            # Append database links
+            anilist_id = api_data.get("id") if api_data else None
+            links = generate_series_links(series, anilist_id=anilist_id, media_type="MANGA")
+            reply = reply + f"\n\n🔗 **Links:** {links}"
             # Natural roasting
             roasted = False
             if should_add_roast(channel_id, "casual"):
@@ -2054,6 +2274,181 @@ async def myprofile_command(ctx: commands.Context):
         lines.append("\n📝 **Recent Discussions:** None yet — use `!discuss`, `!hottake`, or `!compare`!")
 
     await send_long(ctx, "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# New commands: links, fetch, image, ocr, scan
+# ---------------------------------------------------------------------------
+
+@bot.command(name="links", brief="Generate database links for a manga/anime series")
+async def links_command(ctx: commands.Context, *, series: str):
+    """Generate links to major manga/anime databases for a series.
+
+    Fetches AniList data for a direct link when available.
+
+    Examples:
+        !links Solo Leveling
+        !links Attack on Titan
+    """
+    logger.info("!links from %s: %s", ctx.author, series)
+    async with ctx.typing():
+        api_data = (
+            await fetch_anilist_data(series, "MANGA")
+            or await fetch_anilist_data(series, "ANIME")
+        )
+    anilist_id = api_data.get("id") if api_data else None
+    media_type = api_data.get("type") if api_data else None
+    title = api_data.get("title", series) if api_data else series
+    links = generate_series_links(series, anilist_id=anilist_id, media_type=media_type)
+    await ctx.send(f"🔗 **Links for {title}:**\n{links}")
+
+
+@bot.command(name="fetch", brief="Fetch and summarise a webpage")
+async def fetch_command(ctx: commands.Context, *, url: str):
+    """Fetch a URL and display the page title and content summary.
+
+    Example:
+        !fetch https://example.com
+    """
+    url = url.strip("<>")  # Discord sometimes wraps URLs in angle brackets
+    if not url.startswith(("http://", "https://")):
+        await ctx.send("Please provide a valid URL starting with `http://` or `https://`.")
+        return
+    logger.info("!fetch from %s: %s", ctx.author, url)
+    async with ctx.typing():
+        result = await fetch_webpage_content(url)
+    if result.get("success"):
+        reply = (
+            f"🌐 **{result['title']}**\n"
+            f"{result['content']}\n\n"
+            f"🔗 {result['url']}"
+        )
+    else:
+        reply = f"⚠️ Could not fetch that URL: {result.get('error')}"
+    await send_long(ctx, reply)
+
+
+@bot.command(name="image", brief="Analyse an uploaded image (and optionally extract text)")
+async def image_command(ctx: commands.Context):
+    """Analyse an image attached to your message.
+
+    Upload an image together with this command to get a description and any
+    extracted text (OCR).
+
+    Example:
+        !image   (attach an image to the message)
+    """
+    if not ctx.message.attachments:
+        await ctx.send("Please attach an image to the `!image` command.")
+        return
+
+    image_attachments = [
+        att for att in ctx.message.attachments
+        if att.content_type and att.content_type.startswith("image/")
+    ]
+    if not image_attachments:
+        await ctx.send("No image attachments found. Please attach a valid image file.")
+        return
+
+    logger.info("!image from %s (%d attachments)", ctx.author, len(image_attachments))
+    async with ctx.typing():
+        parts: list[str] = []
+        for att in image_attachments[:3]:
+            result = await process_image(att.url)
+            if result.get("success"):
+                section = [f"📸 **{att.filename}** — {result['description']}"]
+                if result.get("text"):
+                    text_preview = result["text"][:500]
+                    section.append(f"📝 **Extracted text:**\n```\n{text_preview}\n```")
+                else:
+                    section.append("📝 No text detected in image.")
+                parts.append("\n".join(section))
+            else:
+                parts.append(f"⚠️ Could not process **{att.filename}**: {result.get('error')}")
+    await send_long(ctx, "\n\n".join(parts))
+
+
+@bot.command(name="ocr", brief="Extract text from an uploaded image")
+async def ocr_command(ctx: commands.Context):
+    """Extract text from an image using OCR (Optical Character Recognition).
+
+    Requires Pillow and pytesseract to be installed.
+
+    Example:
+        !ocr   (attach an image to the message)
+    """
+    if not ctx.message.attachments:
+        await ctx.send("Please attach an image to the `!ocr` command.")
+        return
+
+    image_attachments = [
+        att for att in ctx.message.attachments
+        if att.content_type and att.content_type.startswith("image/")
+    ]
+    if not image_attachments:
+        await ctx.send("No image attachments found. Please attach a valid image file.")
+        return
+
+    if not _IMAGE_PROCESSING_AVAILABLE:
+        await ctx.send("⚠️ OCR is not available (Pillow/pytesseract not installed).")
+        return
+
+    logger.info("!ocr from %s (%d attachments)", ctx.author, len(image_attachments))
+    async with ctx.typing():
+        parts: list[str] = []
+        for att in image_attachments[:3]:
+            result = await process_image(att.url)
+            if result.get("success"):
+                if result.get("text"):
+                    text_preview = result["text"][:1500]
+                    parts.append(f"📝 **{att.filename}:**\n```\n{text_preview}\n```")
+                else:
+                    parts.append(f"📝 **{att.filename}:** No text detected.")
+            else:
+                parts.append(f"⚠️ **{att.filename}:** {result.get('error')}")
+    await send_long(ctx, "\n\n".join(parts))
+
+
+@bot.command(name="scan", brief="Find where to read or track a manga/manhwa series online")
+async def scan_command(ctx: commands.Context, *, series: str):
+    """Find online reading and tracking links for a manga/manhwa series.
+
+    Combines AniList data with links to major reading platforms.
+
+    Examples:
+        !scan Solo Leveling
+        !scan Berserk
+    """
+    logger.info("!scan from %s: %s", ctx.author, series)
+    async with ctx.typing():
+        api_data = (
+            await fetch_anilist_data(series, "MANGA")
+            or await fetch_anilist_data(series, "ANIME")
+        )
+    anilist_id = api_data.get("id") if api_data else None
+    media_type = api_data.get("type") if api_data else None
+    title = api_data.get("title", series) if api_data else series
+    links = generate_series_links(series, anilist_id=anilist_id, media_type=media_type)
+
+    lines = [f"📖 **Where to read/track: {title}**", "", f"🔗 {links}"]
+
+    if api_data:
+        status = api_data.get("status") or "Unknown"
+        status_map = {
+            "RELEASING": "🟢 Ongoing",
+            "FINISHED": "✅ Completed",
+            "NOT_YET_RELEASED": "⏳ Upcoming",
+            "CANCELLED": "❌ Cancelled",
+            "HIATUS": "⏸️ On Hiatus",
+        }
+        lines.append(f"\n📊 Status: {status_map.get(status, status.replace('_', ' ').title())}")
+        if api_data.get("chapters"):
+            lines.append(f"📚 Chapters: {api_data['chapters']}")
+        if api_data.get("score"):
+            lines.append(f"⭐ AniList Score: {api_data['score']}/100")
+
+    await send_long(ctx, "\n".join(lines))
+
 
 # ---------------------------------------------------------------------------
 # Entry point
