@@ -10,8 +10,8 @@ import logging
 import os
 import re
 import aiohttp
+import anthropic
 import wikipedia
-from mistralai.client import MistralClient
 from discord.ext import commands
 
 # ---------------------------------------------------------------------------
@@ -32,13 +32,13 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
     raise EnvironmentError("DISCORD_TOKEN environment variable is not set.")
 
-# Mistral AI Cloud API
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+# Claude AI API
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 
-if not MISTRAL_API_KEY:
-    raise EnvironmentError("MISTRAL_API_KEY environment variable is not set.")
+if not CLAUDE_API_KEY:
+    raise EnvironmentError("CLAUDE_API_KEY environment variable is not set.")
 
-mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
+claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
 # Giphy GIF API (optional — bot works fine without it)
 # Free API key available at https://developers.giphy.com/
@@ -69,7 +69,7 @@ _gif_rate_limited_until: float | None = None  # skip requests until this time
 _gif_message_counter: int = 0              # incremented per response for throttling
 
 SYSTEM_PROMPT = (
-    "You are GopalBot, owned by tomato9553-bit, powered by Mistral AI. "
+    "You are GopalBot, owned by tomato9553-bit, powered by Claude (Anthropic). "
     "Talk naturally and casually — like a chill friend, not a Gen Z meme machine. "
     "Use slang (no cap, fr, cooked, W, L, etc.) sparingly and only when it genuinely adds humor — "
     "not every sentence. Normal conversation most of the time (roughly 70%). "
@@ -80,7 +80,7 @@ SYSTEM_PROMPT = (
     "TONE AWARENESS: When the topic is serious (war, death, tragedy, illness, abuse), drop ALL sarcasm "
     "and humor — be respectful, empathetic, and factual. When someone asks for genuine help or advice, "
     "give a real helpful answer first. "
-    "If asked who made you: 'tomato9553-bit — fully independent, Mistral AI powered, no corporate ties.' "
+    "If asked who made you: 'tomato9553-bit — fully independent, Claude (Anthropic) powered, no corporate ties.' "
     "You are extremely knowledgeable about anime, manga, manhwa, and light novels. "
     "When discussing these topics: cite specific episode, chapter, or volume numbers; "
     "be critical and analytical about character arcs, plot pacing, story quality, and endings; "
@@ -318,7 +318,7 @@ _QUESTION_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# Per-tone system-prompt injections appended during ask_mistral_ai calls
+# Per-tone system-prompt injections appended during ask_claude_ai calls
 _TONE_INSTRUCTIONS: dict[str, str] = {
     "serious": (
         "TONE OVERRIDE: This message is about a serious or sensitive topic. "
@@ -439,7 +439,7 @@ async def generate_contextual_roast(prompt: str, reply: str) -> str | None:
         "'bro you're still at chapter 50? 😭'"
     )
     try:
-        quip = await ask_mistral_ai(roast_prompt)
+        quip = await ask_claude_ai(roast_prompt)
         quip = quip.strip()
         # Sanity-check: reject if too long or if AI returned something empty
         if not quip or len(quip) > 200:
@@ -824,13 +824,13 @@ async def append_contextual_gif(prompt: str, reply: str) -> str:
     return reply
 
 
-async def ask_mistral_ai(
+async def ask_claude_ai(
     prompt: str,
     history: list[dict] | None = None,
     system_prompt_supplement: str = "",
     tone: str = "casual",
 ) -> str:
-    """Query the Mistral AI Cloud API.
+    """Query Claude 3.5 Sonnet via Anthropic API.
 
     *history* is an optional list of previous {"role": ..., "content": ...}
     dicts that are included before the current user message so the model has
@@ -849,7 +849,7 @@ async def ask_mistral_ai(
         full_system = full_system + "\n" + tone_instruction
     if system_prompt_supplement:
         full_system = full_system + "\n" + system_prompt_supplement
-    messages: list[dict] = [{"role": "system", "content": full_system}]
+    messages: list[dict] = []
     if history:
         for msg in history:
             messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
@@ -857,17 +857,19 @@ async def ask_mistral_ai(
 
     try:
         response = await asyncio.to_thread(
-            mistral_client.chat,
-            model="mistral-large-latest",
+            claude_client.messages.create,
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            system=full_system,
             messages=messages,
         )
-        if not response.choices:
-            logger.error("Mistral AI returned no choices in response")
-            return "Sorry, I couldn't get a response from Mistral AI right now. 🤖"
-        return response.choices[0].message.content
+        if not response.content:
+            logger.error("Claude returned no content in response")
+            return "Sorry, I couldn't get a response from Claude right now. 🤖"
+        return response.content[0].text
     except Exception as exc:
-        logger.error("Mistral AI error: %s", exc)
-        return "Sorry, I couldn't get a response from Mistral AI right now. 🤖"
+        logger.error("Claude API error: %s", exc)
+        return "Sorry, I couldn't get a response from Claude right now. 🤖"
 
 # ---------------------------------------------------------------------------
 # AniList API — fetch real manga/manhwa data
@@ -960,7 +962,7 @@ async def fetch_anilist_data(series_name: str, media_type: str = "MANGA") -> dic
 
 
 def _build_series_context(data: dict, requested_chapter: int | None = None) -> str:
-    """Turn AniList data into a concise context string for the Mistral prompt."""
+    """Turn AniList data into a concise context string for the Claude prompt."""
     parts = [f"Series: {data['title']}"]
     if data.get("format"):
         parts.append(f"Format: {data['format']}")
@@ -1273,7 +1275,7 @@ async def on_message(message: discord.Message):
         history = list(channel_history.get(channel_id, []))
         async with message.channel.typing():
             try:
-                reply = await ask_mistral_ai(
+                reply = await ask_claude_ai(
                     prompt, history=history, system_prompt_supplement=supplement, tone=effective_tone
                 )
                 reply = trim_response(reply)
@@ -1301,7 +1303,7 @@ async def on_message(message: discord.Message):
                 record_message(channel_id, "assistant", reply)
                 logger.info("Replied to %s successfully.", message.author)
             except Exception as exc:
-                logger.error("Mistral AI error for %s: %s", message.author, exc, exc_info=True)
+                logger.error("Claude AI error for %s: %s", message.author, exc, exc_info=True)
                 await message.channel.send("Sorry, something went wrong with the AI response!")
 
 
@@ -1321,7 +1323,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
 @bot.command(name="ask", brief="Ask GopalBot a question")
 async def ask_command(ctx: commands.Context, *, question: str):
-    """Ask GopalBot a question (powered by Mistral AI Cloud API).
+    """Ask GopalBot a question (powered by Claude 3.5 Sonnet).
 
     Example:
         !ask What is the speed of light?
@@ -1338,7 +1340,7 @@ async def ask_command(ctx: commands.Context, *, question: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(
+            reply = await ask_claude_ai(
                 question, history=history, system_prompt_supplement=supplement, tone=effective_tone
             )
             reply = trim_response(reply)
@@ -1403,7 +1405,7 @@ async def roast_command(ctx: commands.Context, *, target: str = ""):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply, is_roast=True)
             reply = await append_contextual_gif(prompt, reply)
             bro_context = detect_brochacho_context(prompt, "roast")
@@ -1473,7 +1475,7 @@ async def discuss_command(ctx: commands.Context, *, query: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Natural roasting
             roasted = False
@@ -1517,7 +1519,7 @@ async def theory_command(ctx: commands.Context, *, query: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Natural roasting
             roasted = False
@@ -1557,7 +1559,7 @@ async def anime_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Natural roasting
             roasted = False
@@ -1597,7 +1599,7 @@ async def manga_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Natural roasting
             roasted = False
@@ -1637,7 +1639,7 @@ async def manhwa_command(ctx: commands.Context, *, series: str):
     history = list(channel_history.get(channel_id, []))
     async with ctx.typing():
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Natural roasting
             roasted = False
@@ -1788,7 +1790,7 @@ async def compare_command(ctx: commands.Context, *, query: str):
         supplement = await build_full_supplement(guild_id, ctx.channel)
         history = list(channel_history.get(channel_id, []))
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             # Update user profile with both series
             update_user_discussion(ctx.author.id, ctx.author.display_name, series1, f"compared with {series2}")
             await send_long(ctx, reply)
@@ -1893,7 +1895,7 @@ async def hottake_command(ctx: commands.Context, *, series: str):
         supplement = await build_full_supplement(guild_id, ctx.channel)
         history = list(channel_history.get(channel_id, []))
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement)
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement)
             reply = trim_response(reply)
             # Track in user profile
             update_user_discussion(ctx.author.id, ctx.author.display_name, series, reply[:150])
@@ -1950,7 +1952,7 @@ async def news_command(ctx: commands.Context, *, topic: str):
         supplement = await build_full_supplement(guild_id, ctx.channel)
         history = list(channel_history.get(channel_id, []))
         try:
-            reply = await ask_mistral_ai(prompt, history=history, system_prompt_supplement=supplement, tone="question")
+            reply = await ask_claude_ai(prompt, history=history, system_prompt_supplement=supplement, tone="question")
             source_note = ""
             if articles:
                 urls = [a["url"] for a in articles if a.get("url")][:3]
