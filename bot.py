@@ -20,6 +20,11 @@ try:
     from PIL import Image as _PILImage
     import pytesseract as _pytesseract
     _IMAGE_PROCESSING_AVAILABLE = True
+    # Configure pytesseract to find Tesseract binary on Windows
+    try:
+        _pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    except Exception:
+        pass  # Tesseract already in PATH or not installed
 except ImportError:
     _IMAGE_PROCESSING_AVAILABLE = False
     logger_pre = logging.getLogger("GopalBot")
